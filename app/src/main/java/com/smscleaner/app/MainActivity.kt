@@ -177,7 +177,9 @@ class MainActivity : AppCompatActivity() {
     private fun observeViewModel() {
         viewModel.logText.observe(this) { text ->
             tvLog.text = text
-            scrollLog.post { scrollLog.fullScroll(View.FOCUS_DOWN) }
+            scrollLog.post {
+                scrollLog.scrollTo(0, tvLog.bottom)
+            }
         }
 
         viewModel.isRunning.observe(this) { running ->
