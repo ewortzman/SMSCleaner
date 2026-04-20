@@ -62,6 +62,12 @@ class TestActivity : AppCompatActivity() {
         btnTestStartDate.text = "Start: ${dateFormat.format(Date(startDateMs!!))}"
 
         setupListeners()
+
+        @Suppress("ClickableViewAccessibility")
+        scrollTestLog.setOnTouchListener { v, _ ->
+            v.parent.requestDisallowInterceptTouchEvent(true)
+            false
+        }
     }
 
     private fun bindViews() {
