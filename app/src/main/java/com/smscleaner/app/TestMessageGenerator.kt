@@ -2,11 +2,20 @@ package com.smscleaner.app
 
 import android.content.ContentResolver
 import android.content.ContentValues
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
 import android.net.Uri
 import android.provider.Telephony
+import java.io.ByteArrayOutputStream
 import kotlin.random.Random
 
-class TestMessageGenerator(private val contentResolver: ContentResolver) {
+class TestMessageGenerator(
+    private val contentResolver: ContentResolver,
+    private val context: Context
+) {
 
     private val sampleBodies = listOf(
         "Hey, how are you?",
@@ -31,6 +40,19 @@ class TestMessageGenerator(private val contentResolver: ContentResolver) {
         "Let me check and get back to you"
     )
 
+    private val testImageBytes: ByteArray by lazy {
+        val bmp = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bmp)
+        val paint = Paint().apply { color = Color.rgb(Random.nextInt(256), Random.nextInt(256), Random.nextInt(256)) }
+        canvas.drawRect(0f, 0f, 64f, 64f, paint)
+        val paint2 = Paint().apply { color = Color.WHITE; textSize = 20f; textAlign = Paint.Align.CENTER }
+        canvas.drawText("TEST", 32f, 38f, paint2)
+        val baos = ByteArrayOutputStream()
+        bmp.compress(Bitmap.CompressFormat.JPEG, 80, baos)
+        bmp.recycle()
+        baos.toByteArray()
+    }
+
     fun generate(
         smsCount: Int,
         mmsMediaCount: Int,
@@ -51,12 +73,12 @@ class TestMessageGenerator(private val contentResolver: ContentResolver) {
 
         if (mmsMediaCount > 0) {
             onLog("Generating $mmsMediaCount MMS media messages...")
-            generateMmsMessages(mmsMediaCount, phoneNumbers, startDateMs, endDateMs, hasMedia = true, isGroup = false, onLog)
+            generateMmsMediaMessages(mmsMediaCount, phoneNumbers, startDateMs, endDateMs, onLog)
         }
 
         if (mmsGroupCount > 0) {
             onLog("Generating $mmsGroupCount MMS group messages...")
-            generateMmsMessages(mmsGroupCount, phoneNumbers, startDateMs, endDateMs, hasMedia = false, isGroup = true, onLog)
+            generateMmsGroupMessages(mmsGroupCount, phoneNumbers, startDateMs, endDateMs, onLog)
         }
     }
 
@@ -98,13 +120,82 @@ class TestMessageGenerator(private val contentResolver: ContentResolver) {
         onLog("SMS generation complete: $inserted / $count inserted")
     }
 
-    private fun generateMmsMessages(
+    private fun generateMmsMediaMessages(
         count: Int,
         phoneNumbers: List<String>,
         startDateMs: Long,
         endDateMs: Long,
-        hasMedia: Boolean,
-        isGroup: Boolean,
+        onLog: (String) -> Unit
+    ) {
+        var inserted = 0
+        for (i in 0 until count) {
+            val phone = phoneNumbers[i % phoneNumbers.size]
+            val timestamp = randomTimestamp(startDateMs, endDateMs)
+            val timestampSec = timestamp / 1000
+
+            try {
+                val threadId = Telephony.Threads.getOrCreateThreadId(context, phone)
+
+                val mmsValues = ContentValues().apply {
+                    put(Telephony.Mms.THREAD_ID, threadId)
+                    put(Telephony.Mms.DATE, timestampSec)
+                    put(Telephony.Mms.DATE_SENT, timestampSec)
+                    put(Telephony.Mms.READ, 1)
+                    put(Telephony.Mms.SEEN, 1)
+                    put(Telephony.Mms.MESSAGE_BOX, Telephony.Mms.MESSAGE_BOX_INBOX)
+                    put(Telephony.Mms.CONTENT_TYPE, "application/vnd.wap.multipart.related")
+                    put(Telephony.Mms.MESSAGE_TYPE, 132)
+                }
+
+                val mmsUri = contentResolver.insert(Telephony.Mms.CONTENT_URI, mmsValues) ?: continue
+                val mmsId = mmsUri.lastPathSegment ?: continue
+
+                insertMmsAddress(mmsId, phone, 137)
+                insertMmsAddress(mmsId, "insert-address-token", 151)
+
+                val textPart = ContentValues().apply {
+                    put(Telephony.Mms.Part.MSG_ID, mmsId)
+                    put(Telephony.Mms.Part.CONTENT_TYPE, "text/plain")
+                    put(Telephony.Mms.Part.CHARSET, 106)
+                    put(Telephony.Mms.Part.TEXT, sampleBodies[Random.nextInt(sampleBodies.size)])
+                }
+                contentResolver.insert(Uri.parse("content://mms/$mmsId/part"), textPart)
+
+                val imagePart = ContentValues().apply {
+                    put(Telephony.Mms.Part.MSG_ID, mmsId)
+                    put(Telephony.Mms.Part.CONTENT_TYPE, "image/jpeg")
+                    put(Telephony.Mms.Part.CONTENT_DISPOSITION, "attachment")
+                    put(Telephony.Mms.Part.CONTENT_ID, "<test_image_$i>")
+                    put(Telephony.Mms.Part.NAME, "test_image_$i.jpg")
+                    put(Telephony.Mms.Part._DATA, "test_image_$i.jpg")
+                }
+                val partUri = contentResolver.insert(
+                    Uri.parse("content://mms/$mmsId/part"), imagePart
+                )
+
+                if (partUri != null) {
+                    contentResolver.openOutputStream(partUri)?.use { os ->
+                        os.write(testImageBytes)
+                    }
+                }
+
+                inserted++
+            } catch (e: Exception) {
+                onLog("Failed to insert MMS media #$i: ${e.message}")
+            }
+
+            if (inserted % 50 == 0 && inserted > 0) {
+                onLog("  MMS media progress: $inserted / $count")
+            }
+        }
+        onLog("MMS media generation complete: $inserted / $count inserted")
+    }
+
+    private fun generateMmsGroupMessages(
+        count: Int,
+        phoneNumbers: List<String>,
+        startDateMs: Long,
+        endDateMs: Long,
         onLog: (String) -> Unit
     ) {
         var inserted = 0
@@ -112,75 +203,58 @@ class TestMessageGenerator(private val contentResolver: ContentResolver) {
             val timestamp = randomTimestamp(startDateMs, endDateMs)
             val timestampSec = timestamp / 1000
 
-            val mmsValues = ContentValues().apply {
-                put(Telephony.Mms.DATE, timestampSec)
-                put(Telephony.Mms.DATE_SENT, timestampSec)
-                put(Telephony.Mms.READ, 1)
-                put(Telephony.Mms.SEEN, 1)
-                put(Telephony.Mms.MESSAGE_BOX, Telephony.Mms.MESSAGE_BOX_INBOX)
-                put(Telephony.Mms.CONTENT_TYPE, "application/vnd.wap.multipart.related")
-                put(Telephony.Mms.MESSAGE_TYPE, 132) // MESSAGE_TYPE_RETRIEVE_CONF
-            }
-
             try {
+                val groupSize = Random.nextInt(2, minOf(5, phoneNumbers.size) + 1)
+                val groupMembers = phoneNumbers.shuffled().take(groupSize)
+
+                val recipientSet = groupMembers.toHashSet()
+                val threadId = Telephony.Threads.getOrCreateThreadId(context, recipientSet)
+
+                val mmsValues = ContentValues().apply {
+                    put(Telephony.Mms.THREAD_ID, threadId)
+                    put(Telephony.Mms.DATE, timestampSec)
+                    put(Telephony.Mms.DATE_SENT, timestampSec)
+                    put(Telephony.Mms.READ, 1)
+                    put(Telephony.Mms.SEEN, 1)
+                    put(Telephony.Mms.MESSAGE_BOX, Telephony.Mms.MESSAGE_BOX_INBOX)
+                    put(Telephony.Mms.CONTENT_TYPE, "application/vnd.wap.multipart.mixed")
+                    put(Telephony.Mms.MESSAGE_TYPE, 132)
+                }
+
                 val mmsUri = contentResolver.insert(Telephony.Mms.CONTENT_URI, mmsValues) ?: continue
                 val mmsId = mmsUri.lastPathSegment ?: continue
 
-                if (isGroup) {
-                    val groupSize = Random.nextInt(2, minOf(5, phoneNumbers.size + 1))
-                    val groupMembers = phoneNumbers.shuffled().take(groupSize)
-                    for (member in groupMembers) {
-                        insertMmsAddress(mmsId, member, 151) // PduHeaders.TO
-                    }
-                    insertMmsAddress(mmsId, "insert-address-token", 137) // PduHeaders.FROM
-                } else {
-                    val phone = phoneNumbers[i % phoneNumbers.size]
-                    insertMmsAddress(mmsId, phone, 137) // FROM
+                val sender = groupMembers.first()
+                insertMmsAddress(mmsId, sender, 137)
+                for (member in groupMembers) {
+                    insertMmsAddress(mmsId, member, 151)
                 }
 
                 val textPart = ContentValues().apply {
                     put(Telephony.Mms.Part.MSG_ID, mmsId)
                     put(Telephony.Mms.Part.CONTENT_TYPE, "text/plain")
+                    put(Telephony.Mms.Part.CHARSET, 106)
                     put(Telephony.Mms.Part.TEXT, sampleBodies[Random.nextInt(sampleBodies.size)])
                 }
-                contentResolver.insert(
-                    Uri.parse("content://mms/$mmsId/part"),
-                    textPart
-                )
-
-                if (hasMedia) {
-                    val mediaPart = ContentValues().apply {
-                        put(Telephony.Mms.Part.MSG_ID, mmsId)
-                        put(Telephony.Mms.Part.CONTENT_TYPE, "image/jpeg")
-                        put(Telephony.Mms.Part.NAME, "test_image_$i.jpg")
-                        put(Telephony.Mms.Part.TEXT, "")
-                    }
-                    contentResolver.insert(
-                        Uri.parse("content://mms/$mmsId/part"),
-                        mediaPart
-                    )
-                }
+                contentResolver.insert(Uri.parse("content://mms/$mmsId/part"), textPart)
 
                 inserted++
             } catch (e: Exception) {
-                onLog("Failed to insert MMS #$i: ${e.message}")
+                onLog("Failed to insert MMS group #$i: ${e.message}")
             }
 
             if (inserted % 50 == 0 && inserted > 0) {
-                val type = if (hasMedia) "MMS media" else "MMS group"
-                onLog("  $type progress: $inserted / $count")
+                onLog("  MMS group progress: $inserted / $count")
             }
         }
-
-        val type = if (hasMedia) "MMS media" else "MMS group"
-        onLog("$type generation complete: $inserted / $count inserted")
+        onLog("MMS group generation complete: $inserted / $count inserted")
     }
 
     private fun insertMmsAddress(mmsId: String, address: String, type: Int) {
         val addrValues = ContentValues().apply {
             put("address", address)
             put("type", type)
-            put("charset", 106) // UTF-8
+            put("charset", 106)
         }
         contentResolver.insert(
             Uri.parse("content://mms/$mmsId/addr"),

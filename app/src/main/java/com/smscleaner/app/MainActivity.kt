@@ -56,7 +56,7 @@ class MainActivity : AppCompatActivity() {
     private var suppressSettingsChange = false
 
     private val dateFormat = SimpleDateFormat("MMM dd, yyyy", Locale.US).apply {
-        timeZone = TimeZone.getDefault()
+        timeZone = TimeZone.getTimeZone("UTC")
     }
 
     private val defaultSmsLauncher = registerForActivityResult(

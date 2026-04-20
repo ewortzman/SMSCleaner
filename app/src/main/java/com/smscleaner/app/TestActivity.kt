@@ -41,7 +41,7 @@ class TestActivity : AppCompatActivity() {
     private val logBuilder = StringBuilder()
 
     private val dateFormat = SimpleDateFormat("MMM dd, yyyy", Locale.US).apply {
-        timeZone = TimeZone.getDefault()
+        timeZone = TimeZone.getTimeZone("UTC")
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -106,7 +106,7 @@ class TestActivity : AppCompatActivity() {
         btnGenerate.isEnabled = false
         testProgressBar.visibility = View.VISIBLE
 
-        val generator = TestMessageGenerator(contentResolver)
+        val generator = TestMessageGenerator(contentResolver, this)
 
         generateJob = CoroutineScope(Dispatchers.IO).launch {
             try {
