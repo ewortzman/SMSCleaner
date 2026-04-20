@@ -40,17 +40,27 @@ class TestMessageGenerator(
         "Let me check and get back to you"
     )
 
-    private val testImageBytes: ByteArray by lazy {
-        val bmp = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+    private fun generateTestImage(index: Int): ByteArray {
+        val bmp = Bitmap.createBitmap(200, 200, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bmp)
-        val paint = Paint().apply { color = Color.rgb(Random.nextInt(256), Random.nextInt(256), Random.nextInt(256)) }
-        canvas.drawRect(0f, 0f, 64f, 64f, paint)
-        val paint2 = Paint().apply { color = Color.WHITE; textSize = 20f; textAlign = Paint.Align.CENTER }
-        canvas.drawText("TEST", 32f, 38f, paint2)
+        val bgColor = Color.rgb(
+            (index * 37 + 100) % 256,
+            (index * 73 + 50) % 256,
+            (index * 53 + 150) % 256
+        )
+        canvas.drawColor(bgColor)
+        val paint = Paint().apply {
+            color = Color.WHITE
+            textSize = 40f
+            textAlign = Paint.Align.CENTER
+            isAntiAlias = true
+        }
+        canvas.drawText("TEST", 100f, 90f, paint)
+        canvas.drawText("#$index", 100f, 140f, paint)
         val baos = ByteArrayOutputStream()
-        bmp.compress(Bitmap.CompressFormat.JPEG, 80, baos)
+        bmp.compress(Bitmap.CompressFormat.JPEG, 90, baos)
         bmp.recycle()
-        baos.toByteArray()
+        return baos.toByteArray()
     }
 
     fun generate(
@@ -150,8 +160,8 @@ class TestMessageGenerator(
                 val mmsUri = contentResolver.insert(Telephony.Mms.CONTENT_URI, mmsValues) ?: continue
                 val mmsId = mmsUri.lastPathSegment ?: continue
 
+                // FROM = the sender (the other person)
                 insertMmsAddress(mmsId, phone, 137)
-                insertMmsAddress(mmsId, "insert-address-token", 151)
 
                 val textPart = ContentValues().apply {
                     put(Telephony.Mms.Part.MSG_ID, mmsId)
@@ -161,13 +171,13 @@ class TestMessageGenerator(
                 }
                 contentResolver.insert(Uri.parse("content://mms/$mmsId/part"), textPart)
 
+                // Insert image part — don't set _DATA, let provider manage file path
                 val imagePart = ContentValues().apply {
                     put(Telephony.Mms.Part.MSG_ID, mmsId)
                     put(Telephony.Mms.Part.CONTENT_TYPE, "image/jpeg")
-                    put(Telephony.Mms.Part.CONTENT_DISPOSITION, "attachment")
-                    put(Telephony.Mms.Part.CONTENT_ID, "<test_image_$i>")
-                    put(Telephony.Mms.Part.NAME, "test_image_$i.jpg")
-                    put(Telephony.Mms.Part._DATA, "test_image_$i.jpg")
+                    put(Telephony.Mms.Part.CONTENT_ID, "<img_$i>")
+                    put(Telephony.Mms.Part.NAME, "image_$i.jpg")
+                    put(Telephony.Mms.Part.CONTENT_LOCATION, "image_$i.jpg")
                 }
                 val partUri = contentResolver.insert(
                     Uri.parse("content://mms/$mmsId/part"), imagePart
@@ -175,7 +185,7 @@ class TestMessageGenerator(
 
                 if (partUri != null) {
                     contentResolver.openOutputStream(partUri)?.use { os ->
-                        os.write(testImageBytes)
+                        os.write(generateTestImage(i))
                     }
                 }
 
