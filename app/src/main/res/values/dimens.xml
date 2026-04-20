@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="activity_horizontal_margin">16dp</dimen>
+    <dimen name="activity_vertical_margin">16dp</dimen>
+    <dimen name="section_spacing">24dp</dimen>
+    <dimen name="item_spacing">8dp</dimen>
+    <dimen name="log_area_height">250dp</dimen>
+    <dimen name="min_touch_target">48dp</dimen>
+</resources>

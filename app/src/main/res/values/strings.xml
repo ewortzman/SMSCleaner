@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SMS Cleaner</string>
+    <string name="test_activity_title">Generate Test Messages</string>
+    <string name="start_date">Start Date</string>
+    <string name="end_date">End Date</string>
+    <string name="clear">Clear</string>
+    <string name="sms_checkbox">SMS</string>
+    <string name="mms_media_checkbox">MMS (media attachments)</string>
+    <string name="mms_group_checkbox">MMS (group chat)</string>
+    <string name="rcs_checkbox">RCS</string>
+    <string name="batch_size">Batch Size</string>
+    <string name="batch_size_default">1000</string>
+    <string name="batch_delay">Delay Between Batches (ms)</string>
+    <string name="batch_delay_default">500</string>
+    <string name="dry_run">Dry Run (count only, no delete)</string>
+    <string name="btn_dry_run">Dry Run</string>
+    <string name="btn_run">Delete Messages</string>
+    <string name="btn_stop">Stop</string>
+    <string name="btn_test_activity">Generate Test Messages</string>
+    <string name="btn_generate">Generate</string>
+    <string name="btn_back">Back</string>
+    <string name="sms_count">SMS Messages</string>
+    <string name="mms_media_count">MMS Media Messages</string>
+    <string name="mms_group_count">MMS Group Messages</string>
+    <string name="conversation_count">Number of Conversations</string>
+    <string name="no_date_selected">Not set</string>
+    <string name="run_disabled_hint">Run a dry run first to enable</string>
+    <string name="default_sms_required">This app must be set as default SMS app to modify messages.</string>
+    <string name="btn_set_default">Set as Default SMS App</string>
+    <string name="section_date_range">Date Range</string>
+    <string name="section_message_types">Message Types</string>
+    <string name="section_batch_settings">Batch Settings</string>
+    <string name="section_actions">Actions</string>
+    <string name="section_log">Log Output</string>
+    <string name="compose_not_supported">SMS Cleaner is a cleanup utility.\nComposing messages is not supported.</string>
+    <string name="date_range_required">At least one date (start or end) is required.</string>
+    <string name="type_required">At least one message type must be selected.</string>
+</resources>

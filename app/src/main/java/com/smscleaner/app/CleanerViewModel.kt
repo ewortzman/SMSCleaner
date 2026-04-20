@@ -1,0 +1,130 @@
+package com.smscleaner.app
+
+import android.app.Application
+import android.content.ContentResolver
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+class CleanerViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val _logText = MutableLiveData("")
+    val logText: LiveData<String> = _logText
+
+    private val _isRunning = MutableLiveData(false)
+    val isRunning: LiveData<Boolean> = _isRunning
+
+    private val _isDryRunComplete = MutableLiveData(false)
+    val isDryRunComplete: LiveData<Boolean> = _isDryRunComplete
+
+    private val _isRunButtonEnabled = MutableLiveData(false)
+    val isRunButtonEnabled: LiveData<Boolean> = _isRunButtonEnabled
+
+    private var currentJob: Job? = null
+    private val logBuilder = StringBuilder()
+
+    fun onSettingsChanged() {
+        _isDryRunComplete.value = false
+        _isRunButtonEnabled.value = false
+    }
+
+    fun startDryRun(config: CleanerConfig) {
+        if (_isRunning.value == true) return
+
+        val actualConfig = config.copy(dryRun = true)
+        logBuilder.clear()
+        _logText.value = ""
+        appendLog("Starting dry run...")
+
+        _isRunning.value = true
+
+        currentJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resolver = getApplication<Application>().contentResolver
+                val contactResolver = ContactResolver(resolver)
+                val cleaner = MessageCleaner(resolver, contactResolver, actualConfig) { line ->
+                    appendLogFromBackground(line)
+                }
+                val count = cleaner.execute()
+                appendLogFromBackground("Dry run complete. $count messages would be deleted.")
+
+                withContext(Dispatchers.Main) {
+                    _isDryRunComplete.value = true
+                    _isRunButtonEnabled.value = true
+                    _isRunning.value = false
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                appendLogFromBackground("Dry run cancelled.")
+                withContext(Dispatchers.Main) {
+                    _isRunning.value = false
+                }
+            } catch (e: Exception) {
+                appendLogFromBackground("Error: ${e.message}")
+                withContext(Dispatchers.Main) {
+                    _isRunning.value = false
+                }
+            }
+        }
+    }
+
+    fun startClean(config: CleanerConfig) {
+        if (_isRunning.value == true) return
+
+        val actualConfig = config.copy(dryRun = false)
+        logBuilder.clear()
+        _logText.value = ""
+        appendLog("Starting message deletion...")
+
+        _isRunning.value = true
+        _isRunButtonEnabled.value = false
+
+        currentJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resolver = getApplication<Application>().contentResolver
+                val contactResolver = ContactResolver(resolver)
+                val cleaner = MessageCleaner(resolver, contactResolver, actualConfig) { line ->
+                    appendLogFromBackground(line)
+                }
+                val count = cleaner.execute()
+                appendLogFromBackground("Deletion complete. $count messages deleted.")
+
+                withContext(Dispatchers.Main) {
+                    _isDryRunComplete.value = false
+                    _isRunButtonEnabled.value = false
+                    _isRunning.value = false
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                appendLogFromBackground("Deletion cancelled.")
+                withContext(Dispatchers.Main) {
+                    _isRunning.value = false
+                }
+            } catch (e: Exception) {
+                appendLogFromBackground("Error: ${e.message}")
+                withContext(Dispatchers.Main) {
+                    _isRunning.value = false
+                }
+            }
+        }
+    }
+
+    fun stop() {
+        currentJob?.cancel()
+    }
+
+    private fun appendLog(line: String) {
+        logBuilder.appendLine(line)
+        _logText.postValue(logBuilder.toString())
+    }
+
+    private fun appendLogFromBackground(line: String) {
+        synchronized(logBuilder) {
+            logBuilder.appendLine(line)
+            _logText.postValue(logBuilder.toString())
+        }
+    }
+}
