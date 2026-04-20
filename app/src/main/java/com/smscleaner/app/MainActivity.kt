@@ -85,6 +85,12 @@ class MainActivity : AppCompatActivity() {
         setupListeners()
         observeViewModel()
         requestPermissions()
+
+        @Suppress("ClickableViewAccessibility")
+        scrollLog.setOnTouchListener { v, _ ->
+            v.parent.requestDisallowInterceptTouchEvent(true)
+            false
+        }
     }
 
     override fun onResume() {
