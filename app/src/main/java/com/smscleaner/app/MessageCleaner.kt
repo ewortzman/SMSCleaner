@@ -1,5 +1,6 @@
 package com.smscleaner.app
 
+import android.content.ContentProviderOperation
 import android.content.ContentResolver
 import android.database.Cursor
 import android.net.Uri
@@ -399,13 +400,31 @@ class MessageCleaner(
         ids: List<Long>,
         onChunkProgress: (Int, Int) -> Unit
     ): Int {
+        val authority = uri.authority ?: return 0
         val chunks = ids.chunked(config.deleteChunkSize)
         var totalDeleted = 0
         for ((index, chunk) in chunks.withIndex()) {
             coroutineContext.ensureActive()
-            val idList = chunk.joinToString(",")
-            val deleted = contentResolver.delete(uri, "_id IN ($idList)", null)
-            totalDeleted += deleted
+            val ops = ArrayList<ContentProviderOperation>(chunk.size)
+            for (id in chunk) {
+                ops.add(
+                    ContentProviderOperation.newDelete(Uri.withAppendedPath(uri, id.toString()))
+                        .build()
+                )
+            }
+            try {
+                val results = contentResolver.applyBatch(authority, ops)
+                totalDeleted += results.size
+            } catch (_: Exception) {
+                // Fallback to individual deletes if applyBatch not supported
+                for (id in chunk) {
+                    try {
+                        totalDeleted += contentResolver.delete(
+                            Uri.withAppendedPath(uri, id.toString()), null, null
+                        )
+                    } catch (_: Exception) { }
+                }
+            }
             onChunkProgress(index + 1, chunks.size)
         }
         return totalDeleted
