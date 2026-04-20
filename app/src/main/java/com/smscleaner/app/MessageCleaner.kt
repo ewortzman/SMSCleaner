@@ -422,14 +422,16 @@ class MessageCleaner(
         val isMms = uri == Telephony.Mms.CONTENT_URI
         if (isMms) {
             for (id in ids) {
-                // Delete parts (and their backing media files) before deleting the MMS record
                 try {
                     contentResolver.delete(Uri.parse("content://mms/$id/part"), null, null)
                 } catch (_: Exception) { }
             }
         }
-        val idList = ids.joinToString(",")
-        contentResolver.delete(uri, "_id IN ($idList)", null)
+        // Delete in sub-batches to avoid oversized IN clauses and provider timeouts
+        for (chunk in ids.chunked(DELETE_CHUNK_SIZE)) {
+            val idList = chunk.joinToString(",")
+            contentResolver.delete(uri, "_id IN ($idList)", null)
+        }
     }
 
     private fun formatDateRange(minMs: Long, maxMs: Long): String {
@@ -493,5 +495,6 @@ class MessageCleaner(
 
     companion object {
         private const val ROW_OVERHEAD = 200L
+        private const val DELETE_CHUNK_SIZE = 50
     }
 }
