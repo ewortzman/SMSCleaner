@@ -14,6 +14,8 @@
     <string name="per_type_batch_size">Separate batch size per type</string>
     <string name="batch_size_mms_media">MMS Media Batch Size</string>
     <string name="batch_size_mms_group">MMS Group Batch Size</string>
+    <string name="delete_chunk_size">Delete Chunk Size</string>
+    <string name="delete_chunk_size_default">50</string>
     <string name="batch_delay">Delay Between Batches (ms)</string>
     <string name="batch_delay_default">100</string>
     <string name="dry_run">Dry Run (count only, no delete)</string>

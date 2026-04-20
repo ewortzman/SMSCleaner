@@ -46,6 +46,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var layoutPerTypeBatch: android.widget.LinearLayout
     private lateinit var etBatchSizeMmsMedia: TextInputEditText
     private lateinit var etBatchSizeMmsGroup: TextInputEditText
+    private lateinit var etDeleteChunkSize: TextInputEditText
     private lateinit var etBatchDelay: TextInputEditText
     private lateinit var toggleDeleteOrder: com.google.android.material.button.MaterialButtonToggleGroup
     private lateinit var btnDryRun: MaterialButton
@@ -118,6 +119,7 @@ class MainActivity : AppCompatActivity() {
         layoutPerTypeBatch = findViewById(R.id.layoutPerTypeBatch)
         etBatchSizeMmsMedia = findViewById(R.id.etBatchSizeMmsMedia)
         etBatchSizeMmsGroup = findViewById(R.id.etBatchSizeMmsGroup)
+        etDeleteChunkSize = findViewById(R.id.etDeleteChunkSize)
         etBatchDelay = findViewById(R.id.etBatchDelay)
         toggleDeleteOrder = findViewById(R.id.toggleDeleteOrder)
         btnDryRun = findViewById(R.id.btnDryRun)
@@ -167,6 +169,7 @@ class MainActivity : AppCompatActivity() {
         etBatchSize.addTextChangedListener(textWatcher)
         etBatchSizeMmsMedia.addTextChangedListener(textWatcher)
         etBatchSizeMmsGroup.addTextChangedListener(textWatcher)
+        etDeleteChunkSize.addTextChangedListener(textWatcher)
         etBatchDelay.addTextChangedListener(textWatcher)
 
         cbPerTypeBatch.setOnCheckedChangeListener { _, checked ->
@@ -241,6 +244,7 @@ class MainActivity : AppCompatActivity() {
             etBatchSizeMmsMedia.text.toString().toIntOrNull() ?: 100 else batchSize
         val batchSizeMmsGroup = if (cbPerTypeBatch.isChecked)
             etBatchSizeMmsGroup.text.toString().toIntOrNull() ?: 500 else batchSize
+        val deleteChunkSize = etDeleteChunkSize.text.toString().toIntOrNull() ?: 50
         val delayMs = etBatchDelay.text.toString().toLongOrNull() ?: 100L
         val deleteOrder = if (toggleDeleteOrder.checkedButtonId == R.id.btnNewestFirst)
             DeleteOrder.NEWEST_FIRST else DeleteOrder.OLDEST_FIRST
@@ -255,6 +259,7 @@ class MainActivity : AppCompatActivity() {
             batchSize = batchSize.coerceAtLeast(1),
             batchSizeMmsMedia = batchSizeMmsMedia.coerceAtLeast(1),
             batchSizeMmsGroup = batchSizeMmsGroup.coerceAtLeast(1),
+            deleteChunkSize = deleteChunkSize.coerceAtLeast(1),
             delayMs = delayMs.coerceAtLeast(0),
             dryRun = true,
             deleteOrder = deleteOrder

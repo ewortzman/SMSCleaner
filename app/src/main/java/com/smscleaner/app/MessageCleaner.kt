@@ -25,6 +25,7 @@ data class CleanerConfig(
     val batchSize: Int,
     val batchSizeMmsMedia: Int = batchSize,
     val batchSizeMmsGroup: Int = batchSize,
+    val deleteChunkSize: Int = 50,
     val delayMs: Long,
     val dryRun: Boolean,
     val deleteOrder: DeleteOrder = DeleteOrder.OLDEST_FIRST
@@ -397,7 +398,7 @@ class MessageCleaner(
     }
 
     private suspend fun deleteBatchByIds(uri: Uri, ids: List<Long>) {
-        for (chunk in ids.chunked(DELETE_CHUNK_SIZE)) {
+        for (chunk in ids.chunked(config.deleteChunkSize)) {
             coroutineContext.ensureActive()
             val idList = chunk.joinToString(",")
             contentResolver.delete(uri, "_id IN ($idList)", null)
@@ -465,6 +466,5 @@ class MessageCleaner(
 
     companion object {
         private const val ROW_OVERHEAD = 200L
-        private const val DELETE_CHUNK_SIZE = 50
     }
 }
