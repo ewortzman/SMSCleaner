@@ -7,6 +7,10 @@ import android.provider.Telephony
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 import kotlin.coroutines.coroutineContext
 
 enum class DeleteOrder { OLDEST_FIRST, NEWEST_FIRST }
@@ -41,6 +45,9 @@ class MessageCleaner(
     private var totalFound = 0
     private var totalProcessed = 0
     private val sortDirection = if (config.deleteOrder == DeleteOrder.OLDEST_FIRST) "ASC" else "DESC"
+    private val dateFmt = SimpleDateFormat("MMM dd, yyyy", Locale.US).apply {
+        timeZone = TimeZone.getDefault()
+    }
 
     suspend fun execute(): Int {
         totalFound = 0
@@ -79,9 +86,11 @@ class MessageCleaner(
             coroutineContext.ensureActive()
 
             val ids = mutableListOf<Long>()
+            var batchMinDate = Long.MAX_VALUE
+            var batchMaxDate = Long.MIN_VALUE
             contentResolver.query(
                 uri,
-                arrayOf(Telephony.Sms._ID, Telephony.Sms.THREAD_ID, Telephony.Sms.ADDRESS),
+                arrayOf(Telephony.Sms._ID, Telephony.Sms.THREAD_ID, Telephony.Sms.ADDRESS, "date"),
                 selection,
                 selectionArgs,
                 "date $sortDirection LIMIT ${config.batchSize} OFFSET $offset"
@@ -94,7 +103,10 @@ class MessageCleaner(
                     val id = cursor.getLong(0)
                     val threadId = cursor.getString(1) ?: "unknown"
                     val address = cursor.getString(2) ?: "unknown"
+                    val date = cursor.getLong(3)
                     ids.add(id)
+                    if (date < batchMinDate) batchMinDate = date
+                    if (date > batchMaxDate) batchMaxDate = date
                     conversationMap.getOrPut(threadId) { mutableListOf() }.add(id)
                     addressMap[threadId] = address
                 }
@@ -104,14 +116,15 @@ class MessageCleaner(
             totalFound += ids.size
             offset += ids.size
 
+            val dateRange = formatDateRange(batchMinDate, batchMaxDate)
             if (ids.isNotEmpty() && !config.dryRun) {
                 deleteBatch(uri, ids)
                 totalProcessed += ids.size
-                onLog("SMS batch: deleted ${ids.size} messages (total: $totalProcessed)")
+                onLog("SMS batch: deleted ${ids.size} messages ($dateRange) [total: $totalProcessed]")
                 offset = 0
             } else if (ids.isNotEmpty()) {
                 totalProcessed += ids.size
-                onLog("SMS batch: found ${ids.size} messages (total: $totalProcessed)")
+                onLog("SMS batch: found ${ids.size} messages ($dateRange) [total: $totalProcessed]")
             }
 
             if (hasMore && ids.isNotEmpty()) {
@@ -132,6 +145,7 @@ class MessageCleaner(
         val groupConversations = mutableMapOf<String, MutableList<Long>>()
         val addressMap = mutableMapOf<String, String>()
         val idsToDelete = mutableListOf<Long>()
+        val datesToDelete = mutableListOf<Long>()
 
         var offset = 0
         var hasMore = true
@@ -139,10 +153,11 @@ class MessageCleaner(
         while (hasMore) {
             coroutineContext.ensureActive()
 
-            val batchIds = mutableListOf<Pair<Long, String>>()
+            data class MmsRow(val id: Long, val threadId: String, val dateSec: Long)
+            val batchRows = mutableListOf<MmsRow>()
             contentResolver.query(
                 uri,
-                arrayOf(Telephony.Mms._ID, Telephony.Mms.THREAD_ID),
+                arrayOf(Telephony.Mms._ID, Telephony.Mms.THREAD_ID, "date"),
                 selection,
                 selectionArgs,
                 "date $sortDirection LIMIT ${config.batchSize} OFFSET $offset"
@@ -152,52 +167,52 @@ class MessageCleaner(
                     return@use
                 }
                 while (cursor.moveToNext()) {
-                    val id = cursor.getLong(0)
-                    val threadId = cursor.getString(1) ?: "unknown"
-                    batchIds.add(id to threadId)
+                    batchRows.add(MmsRow(cursor.getLong(0), cursor.getString(1) ?: "unknown", cursor.getLong(2)))
                 }
                 if (cursor.count < config.batchSize) hasMore = false
             } ?: run { hasMore = false }
 
-            for ((id, threadId) in batchIds) {
+            for (row in batchRows) {
                 coroutineContext.ensureActive()
 
-                val hasMedia = mmsHasMedia(id)
-                val isGroup = mmsIsGroup(id)
-                val address = getMmsAddress(id) ?: "unknown"
-                addressMap[threadId] = address
+                val hasMedia = mmsHasMedia(row.id)
+                val isGroup = mmsIsGroup(row.id)
+                val address = getMmsAddress(row.id) ?: "unknown"
+                addressMap[row.threadId] = address
 
-                // Media check takes priority: if it has media attachments, it's a media MMS.
-                // Otherwise, if it has multiple recipients, it's a group MMS.
                 val isMediaMatch = hasMedia && config.includeMmsMedia
                 val isGroupMatch = isGroup && !hasMedia && config.includeMmsGroup
                 val shouldInclude = isMediaMatch || isGroupMatch
 
                 if (shouldInclude) {
-                    idsToDelete.add(id)
+                    idsToDelete.add(row.id)
+                    datesToDelete.add(row.dateSec * 1000)
                     if (isMediaMatch) {
-                        mediaConversations.getOrPut(threadId) { mutableListOf() }.add(id)
+                        mediaConversations.getOrPut(row.threadId) { mutableListOf() }.add(row.id)
                     } else {
-                        groupConversations.getOrPut(threadId) { mutableListOf() }.add(id)
+                        groupConversations.getOrPut(row.threadId) { mutableListOf() }.add(row.id)
                     }
                 }
             }
 
-            offset += batchIds.size
+            offset += batchRows.size
 
             if (idsToDelete.size >= config.batchSize) {
                 val batch = idsToDelete.toList()
+                val batchDates = datesToDelete.toList()
                 idsToDelete.clear()
+                datesToDelete.clear()
                 totalFound += batch.size
+                val dateRange = formatDateRange(batchDates.min(), batchDates.max())
 
                 if (!config.dryRun) {
                     deleteBatch(uri, batch)
                     totalProcessed += batch.size
-                    onLog("MMS batch: deleted ${batch.size} messages (total: $totalProcessed)")
+                    onLog("MMS batch: deleted ${batch.size} messages ($dateRange) [total: $totalProcessed]")
                     offset = 0
                 } else {
                     totalProcessed += batch.size
-                    onLog("MMS batch: found ${batch.size} messages (total: $totalProcessed)")
+                    onLog("MMS batch: found ${batch.size} messages ($dateRange) [total: $totalProcessed]")
                 }
                 delay(config.delayMs)
             }
@@ -205,13 +220,14 @@ class MessageCleaner(
 
         if (idsToDelete.isNotEmpty()) {
             totalFound += idsToDelete.size
+            val dateRange = formatDateRange(datesToDelete.min(), datesToDelete.max())
             if (!config.dryRun) {
                 deleteBatch(Telephony.Mms.CONTENT_URI, idsToDelete)
                 totalProcessed += idsToDelete.size
-                onLog("MMS final batch: deleted ${idsToDelete.size} messages (total: $totalProcessed)")
+                onLog("MMS final batch: deleted ${idsToDelete.size} messages ($dateRange) [total: $totalProcessed]")
             } else {
                 totalProcessed += idsToDelete.size
-                onLog("MMS final batch: found ${idsToDelete.size} messages (total: $totalProcessed)")
+                onLog("MMS final batch: found ${idsToDelete.size} messages ($dateRange) [total: $totalProcessed]")
             }
         }
 
@@ -313,6 +329,12 @@ class MessageCleaner(
         }
         val idList = ids.joinToString(",")
         contentResolver.delete(uri, "_id IN ($idList)", null)
+    }
+
+    private fun formatDateRange(minMs: Long, maxMs: Long): String {
+        val from = dateFmt.format(Date(minMs))
+        val to = dateFmt.format(Date(maxMs))
+        return if (from == to) from else "$from \u2013 $to"
     }
 
     private fun buildDateSelection(dateColumn: String): String? {
