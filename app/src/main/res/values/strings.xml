@@ -11,8 +11,11 @@
     <string name="rcs_checkbox">RCS</string>
     <string name="batch_size">Batch Size</string>
     <string name="batch_size_default">1000</string>
+    <string name="per_type_batch_size">Separate batch size per type</string>
+    <string name="batch_size_mms_media">MMS Media Batch Size</string>
+    <string name="batch_size_mms_group">MMS Group Batch Size</string>
     <string name="batch_delay">Delay Between Batches (ms)</string>
-    <string name="batch_delay_default">500</string>
+    <string name="batch_delay_default">100</string>
     <string name="dry_run">Dry Run (count only, no delete)</string>
     <string name="btn_dry_run">Dry Run</string>
     <string name="btn_run">Delete Messages</string>

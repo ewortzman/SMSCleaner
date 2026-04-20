@@ -42,6 +42,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var cbMmsGroup: MaterialCheckBox
     private lateinit var cbRcs: MaterialCheckBox
     private lateinit var etBatchSize: TextInputEditText
+    private lateinit var cbPerTypeBatch: MaterialCheckBox
+    private lateinit var layoutPerTypeBatch: android.widget.LinearLayout
+    private lateinit var etBatchSizeMmsMedia: TextInputEditText
+    private lateinit var etBatchSizeMmsGroup: TextInputEditText
     private lateinit var etBatchDelay: TextInputEditText
     private lateinit var toggleDeleteOrder: com.google.android.material.button.MaterialButtonToggleGroup
     private lateinit var btnDryRun: MaterialButton
@@ -110,6 +114,10 @@ class MainActivity : AppCompatActivity() {
         cbMmsGroup = findViewById(R.id.cbMmsGroup)
         cbRcs = findViewById(R.id.cbRcs)
         etBatchSize = findViewById(R.id.etBatchSize)
+        cbPerTypeBatch = findViewById(R.id.cbPerTypeBatch)
+        layoutPerTypeBatch = findViewById(R.id.layoutPerTypeBatch)
+        etBatchSizeMmsMedia = findViewById(R.id.etBatchSizeMmsMedia)
+        etBatchSizeMmsGroup = findViewById(R.id.etBatchSizeMmsGroup)
         etBatchDelay = findViewById(R.id.etBatchDelay)
         toggleDeleteOrder = findViewById(R.id.toggleDeleteOrder)
         btnDryRun = findViewById(R.id.btnDryRun)
@@ -157,7 +165,14 @@ class MainActivity : AppCompatActivity() {
             }
         }
         etBatchSize.addTextChangedListener(textWatcher)
+        etBatchSizeMmsMedia.addTextChangedListener(textWatcher)
+        etBatchSizeMmsGroup.addTextChangedListener(textWatcher)
         etBatchDelay.addTextChangedListener(textWatcher)
+
+        cbPerTypeBatch.setOnCheckedChangeListener { _, checked ->
+            layoutPerTypeBatch.visibility = if (checked) View.VISIBLE else View.GONE
+            if (!suppressSettingsChange) onSettingsChanged()
+        }
 
         toggleDeleteOrder.addOnButtonCheckedListener { _, _, _ ->
             if (!suppressSettingsChange) onSettingsChanged()
@@ -222,7 +237,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         val batchSize = etBatchSize.text.toString().toIntOrNull() ?: 1000
-        val delayMs = etBatchDelay.text.toString().toLongOrNull() ?: 500L
+        val batchSizeMmsMedia = if (cbPerTypeBatch.isChecked)
+            etBatchSizeMmsMedia.text.toString().toIntOrNull() ?: 100 else batchSize
+        val batchSizeMmsGroup = if (cbPerTypeBatch.isChecked)
+            etBatchSizeMmsGroup.text.toString().toIntOrNull() ?: 500 else batchSize
+        val delayMs = etBatchDelay.text.toString().toLongOrNull() ?: 100L
         val deleteOrder = if (toggleDeleteOrder.checkedButtonId == R.id.btnNewestFirst)
             DeleteOrder.NEWEST_FIRST else DeleteOrder.OLDEST_FIRST
 
@@ -234,6 +253,8 @@ class MainActivity : AppCompatActivity() {
             includeMmsGroup = cbMmsGroup.isChecked,
             includeRcs = cbRcs.isChecked,
             batchSize = batchSize.coerceAtLeast(1),
+            batchSizeMmsMedia = batchSizeMmsMedia.coerceAtLeast(1),
+            batchSizeMmsGroup = batchSizeMmsGroup.coerceAtLeast(1),
             delayMs = delayMs.coerceAtLeast(0),
             dryRun = true,
             deleteOrder = deleteOrder

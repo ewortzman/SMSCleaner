@@ -23,6 +23,8 @@ data class CleanerConfig(
     val includeMmsGroup: Boolean,
     val includeRcs: Boolean,
     val batchSize: Int,
+    val batchSizeMmsMedia: Int = batchSize,
+    val batchSizeMmsGroup: Int = batchSize,
     val delayMs: Long,
     val dryRun: Boolean,
     val deleteOrder: DeleteOrder = DeleteOrder.OLDEST_FIRST
@@ -157,14 +159,19 @@ class MessageCleaner(
         val uri = Telephony.Mms.CONTENT_URI
         val selection = buildDateSelection("date")
         val selectionArgs = buildDateSelectionArgs(useSeconds = true)
+        val scanBatchSize = maxOf(config.batchSizeMmsMedia, config.batchSizeMmsGroup)
 
         val mediaConversations = mutableMapOf<String, MutableList<Long>>()
         val groupConversations = mutableMapOf<String, MutableList<Long>>()
         val addressMap = mutableMapOf<String, String>()
-        val idsToDelete = mutableListOf<Long>()
-        val datesToDelete = mutableListOf<Long>()
+
+        val mediaIds = mutableListOf<Long>()
+        val mediaDates = mutableListOf<Long>()
+        val groupIds = mutableListOf<Long>()
+        val groupDates = mutableListOf<Long>()
         var mediaBytes = 0L
         var groupBytes = 0L
+        var needOffsetReset = false
 
         var offset = 0
         var hasMore = true
@@ -179,7 +186,7 @@ class MessageCleaner(
                 arrayOf(Telephony.Mms._ID, Telephony.Mms.THREAD_ID, "date"),
                 selection,
                 selectionArgs,
-                "date $sortDirection LIMIT ${config.batchSize} OFFSET $offset"
+                "date $sortDirection LIMIT $scanBatchSize OFFSET $offset"
             )?.use { cursor ->
                 if (cursor.count == 0) {
                     hasMore = false
@@ -188,7 +195,7 @@ class MessageCleaner(
                 while (cursor.moveToNext()) {
                     batchRows.add(MmsRow(cursor.getLong(0), cursor.getString(1) ?: "unknown", cursor.getLong(2)))
                 }
-                if (cursor.count < config.batchSize) hasMore = false
+                if (cursor.count < scanBatchSize) hasMore = false
             } ?: run { hasMore = false }
 
             for (row in batchRows) {
@@ -201,56 +208,49 @@ class MessageCleaner(
 
                 val isMediaMatch = hasMedia && config.includeMmsMedia
                 val isGroupMatch = isGroup && !hasMedia && config.includeMmsGroup
-                val shouldInclude = isMediaMatch || isGroupMatch
 
-                if (shouldInclude) {
-                    idsToDelete.add(row.id)
-                    datesToDelete.add(row.dateSec * 1000)
+                if (isMediaMatch) {
                     val partSize = getMmsPartSize(row.id)
-                    if (isMediaMatch) {
-                        mediaBytes += partSize
-                        mediaConversations.getOrPut(row.threadId) { mutableListOf() }.add(row.id)
-                    } else {
-                        groupBytes += partSize
-                        groupConversations.getOrPut(row.threadId) { mutableListOf() }.add(row.id)
-                    }
+                    mediaBytes += partSize
+                    mediaIds.add(row.id)
+                    mediaDates.add(row.dateSec * 1000)
+                    mediaConversations.getOrPut(row.threadId) { mutableListOf() }.add(row.id)
+                } else if (isGroupMatch) {
+                    val partSize = getMmsPartSize(row.id)
+                    groupBytes += partSize
+                    groupIds.add(row.id)
+                    groupDates.add(row.dateSec * 1000)
+                    groupConversations.getOrPut(row.threadId) { mutableListOf() }.add(row.id)
                 }
             }
 
             offset += batchRows.size
 
-            if (idsToDelete.size >= config.batchSize) {
-                val batch = idsToDelete.toList()
-                val batchDates = datesToDelete.toList()
-                idsToDelete.clear()
-                datesToDelete.clear()
-                totalFound += batch.size
-                val dateRange = formatDateRange(batchDates.min(), batchDates.max())
+            if (mediaIds.size >= config.batchSizeMmsMedia) {
+                flushMmsBatch("MMS (media)", uri, mediaIds, mediaDates, config.batchSizeMmsMedia)
+                needOffsetReset = true
+            }
+            if (groupIds.size >= config.batchSizeMmsGroup) {
+                flushMmsBatch("MMS (group)", uri, groupIds, groupDates, config.batchSizeMmsGroup)
+                needOffsetReset = true
+            }
 
-                if (!config.dryRun) {
-                    deleteBatch(uri, batch)
-                    totalProcessed += batch.size
-                    onLog("MMS batch: deleted ${batch.size} messages ($dateRange) [total: $totalProcessed]")
-                    offset = 0
-                } else {
-                    totalProcessed += batch.size
-                    onLog("MMS batch: found ${batch.size} messages ($dateRange) [total: $totalProcessed]")
-                }
+            if (needOffsetReset && !config.dryRun) {
+                offset = 0
+                needOffsetReset = false
+            }
+
+            if (hasMore && batchRows.isNotEmpty()) {
                 delay(config.delayMs)
             }
         }
 
-        if (idsToDelete.isNotEmpty()) {
-            totalFound += idsToDelete.size
-            val dateRange = formatDateRange(datesToDelete.min(), datesToDelete.max())
-            if (!config.dryRun) {
-                deleteBatch(Telephony.Mms.CONTENT_URI, idsToDelete)
-                totalProcessed += idsToDelete.size
-                onLog("MMS final batch: deleted ${idsToDelete.size} messages ($dateRange) [total: $totalProcessed]")
-            } else {
-                totalProcessed += idsToDelete.size
-                onLog("MMS final batch: found ${idsToDelete.size} messages ($dateRange) [total: $totalProcessed]")
-            }
+        // Flush remaining
+        if (mediaIds.isNotEmpty()) {
+            flushMmsBatch("MMS (media)", uri, mediaIds, mediaDates, mediaIds.size)
+        }
+        if (groupIds.isNotEmpty()) {
+            flushMmsBatch("MMS (group)", uri, groupIds, groupDates, groupIds.size)
         }
 
         if (config.includeMmsMedia) {
@@ -262,6 +262,33 @@ class MessageCleaner(
             totalSizeBytes += groupBytes
             onLog("MMS (group) total: ${groupConversations.values.sumOf { it.size }} messages, ~${formatSize(groupBytes)}")
             logConversationSummary("MMS (group)", groupConversations, addressMap)
+        }
+    }
+
+    private suspend fun flushMmsBatch(
+        label: String,
+        uri: Uri,
+        ids: MutableList<Long>,
+        dates: MutableList<Long>,
+        batchSize: Int
+    ) {
+        while (ids.size >= batchSize) {
+            val batch = ids.subList(0, batchSize).toList()
+            val batchDates = dates.subList(0, batchSize).toList()
+            repeat(batchSize) { ids.removeFirst(); dates.removeFirst() }
+
+            totalFound += batch.size
+            val dateRange = formatDateRange(batchDates.min(), batchDates.max())
+
+            if (!config.dryRun) {
+                deleteBatch(uri, batch)
+                totalProcessed += batch.size
+                onLog("$label batch: deleted ${batch.size} messages ($dateRange) [total: $totalProcessed]")
+            } else {
+                totalProcessed += batch.size
+                onLog("$label batch: found ${batch.size} messages ($dateRange) [total: $totalProcessed]")
+            }
+            delay(config.delayMs)
         }
     }
 
