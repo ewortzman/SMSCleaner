@@ -90,6 +90,14 @@ class MessageCleaner(
         onLog("Database totals: $smsCount SMS, $mmsCount MMS (${smsCount + mmsCount} total)")
     }
 
+    private fun countWithSelection(uri: Uri, selection: String?, selectionArgs: Array<String>?): Long {
+        return try {
+            contentResolver.query(uri, arrayOf("COUNT(*)"), selection, selectionArgs, null)?.use { cursor ->
+                if (cursor.moveToFirst()) cursor.getLong(0) else 0L
+            } ?: 0L
+        } catch (_: Exception) { 0L }
+    }
+
     private fun countRows(uri: Uri): Long {
         return try {
             contentResolver.query(uri, arrayOf("COUNT(*)"), null, null, null)?.use { cursor ->
@@ -104,9 +112,15 @@ class MessageCleaner(
         val selection = buildDateSelection("date")
         val selectionArgs = buildDateSelectionArgs(useSeconds = false)
 
+        if (!config.dryRun) {
+            val total = countWithSelection(uri, selection, selectionArgs)
+            onLog("SMS: $total messages to delete")
+        }
+
         val conversationMap = mutableMapOf<String, MutableList<Long>>()
         val addressMap = mutableMapOf<String, String>()
         var smsBytes = 0L
+        var smsDeletedSoFar = 0
 
         var offset = 0
         var hasMore = true
@@ -157,12 +171,14 @@ class MessageCleaner(
 
             val dateRange = formatDateRange(batchMinDate, batchMaxDate)
             if (ids.isNotEmpty() && !config.dryRun) {
-                onLog("SMS batch: deleting ${ids.size} messages ($dateRange)...")
+                onLog("SMS: deleting ${ids.size} messages ($dateRange)...")
                 val deleted = deleteWithProgress(uri, ids) { chunkDone, chunkTotal ->
-                    onLog("  chunk $chunkDone/$chunkTotal [total: $totalProcessed + $chunkDone]")
+                    val running = smsDeletedSoFar + (chunkDone * config.deleteChunkSize).coerceAtMost(ids.size)
+                    onLog("  SMS: $running deleted so far")
                 }
+                smsDeletedSoFar += deleted
                 totalProcessed += deleted
-                onLog("SMS batch: deleted $deleted messages ($dateRange) [total: $totalProcessed]")
+                onLog("SMS: $smsDeletedSoFar deleted ($dateRange)")
                 offset = 0
             } else if (ids.isNotEmpty()) {
                 totalProcessed += ids.size
@@ -193,8 +209,10 @@ class MessageCleaner(
 
         val mediaIds = mutableListOf<Long>()
         val mediaDates = mutableListOf<Long>()
+        val mediaDeletedSoFar = intArrayOf(0)
         val groupIds = mutableListOf<Long>()
         val groupDates = mutableListOf<Long>()
+        val groupDeletedSoFar = intArrayOf(0)
         var mediaBytes = 0L
         var groupBytes = 0L
         var needOffsetReset = false
@@ -252,11 +270,11 @@ class MessageCleaner(
             offset += batchRows.size
 
             if (mediaIds.size >= config.batchSizeMmsMedia) {
-                flushMmsBatch("MMS (media)", uri, mediaIds, mediaDates, config.batchSizeMmsMedia)
+                flushMmsBatch("MMS (media)", uri, mediaIds, mediaDates, config.batchSizeMmsMedia, mediaDeletedSoFar)
                 needOffsetReset = true
             }
             if (groupIds.size >= config.batchSizeMmsGroup) {
-                flushMmsBatch("MMS (group)", uri, groupIds, groupDates, config.batchSizeMmsGroup)
+                flushMmsBatch("MMS (group)", uri, groupIds, groupDates, config.batchSizeMmsGroup, groupDeletedSoFar)
                 needOffsetReset = true
             }
 
@@ -272,10 +290,10 @@ class MessageCleaner(
 
         // Flush remaining
         if (mediaIds.isNotEmpty()) {
-            flushMmsBatch("MMS (media)", uri, mediaIds, mediaDates, mediaIds.size)
+            flushMmsBatch("MMS (media)", uri, mediaIds, mediaDates, mediaIds.size, mediaDeletedSoFar)
         }
         if (groupIds.isNotEmpty()) {
-            flushMmsBatch("MMS (group)", uri, groupIds, groupDates, groupIds.size)
+            flushMmsBatch("MMS (group)", uri, groupIds, groupDates, groupIds.size, groupDeletedSoFar)
         }
 
         if (config.includeMmsMedia) {
@@ -295,7 +313,8 @@ class MessageCleaner(
         uri: Uri,
         ids: MutableList<Long>,
         dates: MutableList<Long>,
-        batchSize: Int
+        batchSize: Int,
+        deletedSoFar: IntArray
     ) {
         while (ids.size >= batchSize) {
             val batch = ids.subList(0, batchSize).toList()
@@ -307,12 +326,14 @@ class MessageCleaner(
             val dateRange = formatDateRange(batchDates.min(), batchDates.max())
 
             if (!config.dryRun) {
-                onLog("$label batch: deleting ${batch.size} messages ($dateRange)...")
+                onLog("$label: deleting ${batch.size} messages ($dateRange)...")
                 val deleted = deleteWithProgress(uri, batch) { chunkDone, chunkTotal ->
-                    onLog("  chunk $chunkDone/$chunkTotal [total: $totalProcessed + $chunkDone]")
+                    val running = deletedSoFar[0] + (chunkDone * config.deleteChunkSize).coerceAtMost(batch.size)
+                    onLog("  $label: $running deleted so far")
                 }
+                deletedSoFar[0] += deleted
                 totalProcessed += deleted
-                onLog("$label batch: deleted $deleted messages ($dateRange) [total: $totalProcessed]")
+                onLog("$label: ${deletedSoFar[0]} deleted ($dateRange)")
             } else {
                 totalProcessed += batch.size
                 onLog("$label batch: found ${batch.size} messages ($dateRange) [total: $totalProcessed]")
