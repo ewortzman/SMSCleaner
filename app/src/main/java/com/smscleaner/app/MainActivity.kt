@@ -159,22 +159,8 @@ class MainActivity : AppCompatActivity() {
         cbMmsGroup.setOnCheckedChangeListener(checkListener)
         cbRcs.setOnCheckedChangeListener(checkListener)
 
-        val textWatcher = object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-            override fun afterTextChanged(s: Editable?) {
-                if (!suppressSettingsChange) onSettingsChanged()
-            }
-        }
-        etBatchSize.addTextChangedListener(textWatcher)
-        etBatchSizeMmsMedia.addTextChangedListener(textWatcher)
-        etBatchSizeMmsGroup.addTextChangedListener(textWatcher)
-        etDeleteChunkSize.addTextChangedListener(textWatcher)
-        etBatchDelay.addTextChangedListener(textWatcher)
-
         cbPerTypeBatch.setOnCheckedChangeListener { _, checked ->
             layoutPerTypeBatch.visibility = if (checked) View.VISIBLE else View.GONE
-            if (!suppressSettingsChange) onSettingsChanged()
         }
 
         toggleDeleteOrder.addOnButtonCheckedListener { _, _, _ ->

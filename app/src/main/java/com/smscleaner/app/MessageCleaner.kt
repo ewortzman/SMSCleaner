@@ -156,10 +156,12 @@ class MessageCleaner(
 
             val dateRange = formatDateRange(batchMinDate, batchMaxDate)
             if (ids.isNotEmpty() && !config.dryRun) {
-                // Delete by date range — single call, much faster than per-ID
-                val deleteCount = deleteByDateRange(uri, "date", batchMinDate, batchMaxDate)
-                totalProcessed += deleteCount
-                onLog("SMS batch: deleted $deleteCount messages ($dateRange) [total: $totalProcessed]")
+                onLog("SMS batch: deleting ${ids.size} messages ($dateRange)...")
+                val deleted = deleteWithProgress(uri, ids) { chunkDone, chunkTotal ->
+                    onLog("  chunk $chunkDone/$chunkTotal [total: $totalProcessed + $chunkDone]")
+                }
+                totalProcessed += deleted
+                onLog("SMS batch: deleted $deleted messages ($dateRange) [total: $totalProcessed]")
                 offset = 0
             } else if (ids.isNotEmpty()) {
                 totalProcessed += ids.size
@@ -304,9 +306,12 @@ class MessageCleaner(
             val dateRange = formatDateRange(batchDates.min(), batchDates.max())
 
             if (!config.dryRun) {
-                deleteBatchByIds(uri, batch)
-                totalProcessed += batch.size
-                onLog("$label batch: deleted ${batch.size} messages ($dateRange) [total: $totalProcessed]")
+                onLog("$label batch: deleting ${batch.size} messages ($dateRange)...")
+                val deleted = deleteWithProgress(uri, batch) { chunkDone, chunkTotal ->
+                    onLog("  chunk $chunkDone/$chunkTotal [total: $totalProcessed + $chunkDone]")
+                }
+                totalProcessed += deleted
+                onLog("$label batch: deleted $deleted messages ($dateRange) [total: $totalProcessed]")
             } else {
                 totalProcessed += batch.size
                 onLog("$label batch: found ${batch.size} messages ($dateRange) [total: $totalProcessed]")
@@ -389,20 +394,21 @@ class MessageCleaner(
         return false to firstAddress
     }
 
-    private fun deleteByDateRange(uri: Uri, dateCol: String, minDate: Long, maxDate: Long): Int {
-        return contentResolver.delete(
-            uri,
-            "$dateCol >= ? AND $dateCol <= ?",
-            arrayOf(minDate.toString(), maxDate.toString())
-        )
-    }
-
-    private suspend fun deleteBatchByIds(uri: Uri, ids: List<Long>) {
-        for (chunk in ids.chunked(config.deleteChunkSize)) {
+    private suspend fun deleteWithProgress(
+        uri: Uri,
+        ids: List<Long>,
+        onChunkProgress: (Int, Int) -> Unit
+    ): Int {
+        val chunks = ids.chunked(config.deleteChunkSize)
+        var totalDeleted = 0
+        for ((index, chunk) in chunks.withIndex()) {
             coroutineContext.ensureActive()
             val idList = chunk.joinToString(",")
-            contentResolver.delete(uri, "_id IN ($idList)", null)
+            val deleted = contentResolver.delete(uri, "_id IN ($idList)", null)
+            totalDeleted += deleted
+            onChunkProgress(index + 1, chunks.size)
         }
+        return totalDeleted
     }
 
     private fun formatDateRange(minMs: Long, maxMs: Long): String {
