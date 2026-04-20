@@ -10,7 +10,9 @@ import android.graphics.Paint
 import android.net.Uri
 import android.provider.Telephony
 import java.io.ByteArrayOutputStream
+import kotlin.coroutines.coroutineContext
 import kotlin.random.Random
+import kotlinx.coroutines.ensureActive
 
 class TestMessageGenerator(
     private val contentResolver: ContentResolver,
@@ -63,7 +65,7 @@ class TestMessageGenerator(
         return baos.toByteArray()
     }
 
-    fun generate(
+    suspend fun generate(
         smsCount: Int,
         mmsMediaCount: Int,
         mmsGroupCount: Int,
@@ -102,7 +104,7 @@ class TestMessageGenerator(
         }
     }
 
-    private fun generateSmsMessages(
+    private suspend fun generateSmsMessages(
         count: Int,
         phoneNumbers: List<String>,
         startDateMs: Long,
@@ -111,6 +113,7 @@ class TestMessageGenerator(
     ) {
         var inserted = 0
         for (i in 0 until count) {
+            coroutineContext.ensureActive()
             val phone = phoneNumbers[i % phoneNumbers.size]
             val timestamp = randomTimestamp(startDateMs, endDateMs)
             val body = sampleBodies[Random.nextInt(sampleBodies.size)]
@@ -140,7 +143,7 @@ class TestMessageGenerator(
         onLog("SMS generation complete: $inserted / $count inserted")
     }
 
-    private fun generateMmsMediaMessages(
+    private suspend fun generateMmsMediaMessages(
         count: Int,
         phoneNumbers: List<String>,
         startDateMs: Long,
@@ -149,12 +152,14 @@ class TestMessageGenerator(
     ) {
         var inserted = 0
         for (i in 0 until count) {
+            coroutineContext.ensureActive()
             val phone = phoneNumbers[i % phoneNumbers.size]
             val timestamp = randomTimestamp(startDateMs, endDateMs)
             val timestampSec = timestamp / 1000
 
             try {
                 val threadId = Telephony.Threads.getOrCreateThreadId(context, phone)
+                val isSent = Random.nextBoolean()
 
                 val mmsValues = ContentValues().apply {
                     put(Telephony.Mms.THREAD_ID, threadId)
@@ -162,16 +167,20 @@ class TestMessageGenerator(
                     put(Telephony.Mms.DATE_SENT, timestampSec)
                     put(Telephony.Mms.READ, 1)
                     put(Telephony.Mms.SEEN, 1)
-                    put(Telephony.Mms.MESSAGE_BOX, Telephony.Mms.MESSAGE_BOX_INBOX)
+                    put(Telephony.Mms.MESSAGE_BOX,
+                        if (isSent) Telephony.Mms.MESSAGE_BOX_SENT else Telephony.Mms.MESSAGE_BOX_INBOX)
                     put(Telephony.Mms.CONTENT_TYPE, "application/vnd.wap.multipart.related")
-                    put(Telephony.Mms.MESSAGE_TYPE, 132)
+                    put(Telephony.Mms.MESSAGE_TYPE, if (isSent) 128 else 132)
                 }
 
                 val mmsUri = contentResolver.insert(Telephony.Mms.CONTENT_URI, mmsValues) ?: continue
                 val mmsId = mmsUri.lastPathSegment ?: continue
 
-                // FROM = the sender (the other person)
-                insertMmsAddress(mmsId, phone, 137)
+                if (isSent) {
+                    insertMmsAddress(mmsId, phone, 151)
+                } else {
+                    insertMmsAddress(mmsId, phone, 137)
+                }
 
                 val textPart = ContentValues().apply {
                     put(Telephony.Mms.Part.MSG_ID, mmsId)
@@ -211,22 +220,33 @@ class TestMessageGenerator(
         onLog("MMS media generation complete: $inserted / $count inserted")
     }
 
-    private fun generateMmsGroupMessages(
+    private suspend fun generateMmsGroupMessages(
         count: Int,
         groupCombos: List<List<String>>,
         startDateMs: Long,
         endDateMs: Long,
         onLog: (String) -> Unit
     ) {
+        // Track per-combo round-robin counters: slot 0 = "me" (sent), slots 1..n = each member
+        val comboCounters = IntArray(groupCombos.size)
+
         var inserted = 0
         for (i in 0 until count) {
+            coroutineContext.ensureActive()
             val timestamp = randomTimestamp(startDateMs, endDateMs)
             val timestampSec = timestamp / 1000
 
             try {
-                val groupMembers = groupCombos[i % groupCombos.size]
+                val comboIndex = i % groupCombos.size
+                val groupMembers = groupCombos[comboIndex]
                 val recipientSet = groupMembers.toHashSet()
                 val threadId = Telephony.Threads.getOrCreateThreadId(context, recipientSet)
+
+                // Round-robin: slot 0 = sent by me, slots 1..n = received from member[slot-1]
+                val totalParticipants = groupMembers.size + 1 // members + "me"
+                val slot = comboCounters[comboIndex] % totalParticipants
+                comboCounters[comboIndex]++
+                val isSent = slot == 0
 
                 val mmsValues = ContentValues().apply {
                     put(Telephony.Mms.THREAD_ID, threadId)
@@ -234,18 +254,25 @@ class TestMessageGenerator(
                     put(Telephony.Mms.DATE_SENT, timestampSec)
                     put(Telephony.Mms.READ, 1)
                     put(Telephony.Mms.SEEN, 1)
-                    put(Telephony.Mms.MESSAGE_BOX, Telephony.Mms.MESSAGE_BOX_INBOX)
+                    put(Telephony.Mms.MESSAGE_BOX,
+                        if (isSent) Telephony.Mms.MESSAGE_BOX_SENT else Telephony.Mms.MESSAGE_BOX_INBOX)
                     put(Telephony.Mms.CONTENT_TYPE, "application/vnd.wap.multipart.mixed")
-                    put(Telephony.Mms.MESSAGE_TYPE, 132)
+                    put(Telephony.Mms.MESSAGE_TYPE, if (isSent) 128 else 132)
                 }
 
                 val mmsUri = contentResolver.insert(Telephony.Mms.CONTENT_URI, mmsValues) ?: continue
                 val mmsId = mmsUri.lastPathSegment ?: continue
 
-                val sender = groupMembers.first()
-                insertMmsAddress(mmsId, sender, 137)
-                for (member in groupMembers) {
-                    insertMmsAddress(mmsId, member, 151)
+                if (isSent) {
+                    for (member in groupMembers) {
+                        insertMmsAddress(mmsId, member, 151)
+                    }
+                } else {
+                    val senderIndex = slot - 1 // slot 1 = member[0], slot 2 = member[1], etc.
+                    insertMmsAddress(mmsId, groupMembers[senderIndex], 137)
+                    for (member in groupMembers) {
+                        insertMmsAddress(mmsId, member, 151)
+                    }
                 }
 
                 val textPart = ContentValues().apply {

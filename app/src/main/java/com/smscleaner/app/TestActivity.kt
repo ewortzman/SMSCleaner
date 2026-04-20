@@ -10,6 +10,7 @@ import com.google.android.material.datepicker.MaterialDatePicker
 import com.google.android.material.progressindicator.LinearProgressIndicator
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textview.MaterialTextView
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -31,6 +32,7 @@ class TestActivity : AppCompatActivity() {
     private lateinit var etConversationCount: TextInputEditText
     private lateinit var etGroupConversationCount: TextInputEditText
     private lateinit var btnGenerate: MaterialButton
+    private lateinit var btnCancel: MaterialButton
     private lateinit var testProgressBar: LinearProgressIndicator
     private lateinit var tvTestLog: MaterialTextView
     private lateinit var scrollTestLog: ScrollView
@@ -71,6 +73,7 @@ class TestActivity : AppCompatActivity() {
         etConversationCount = findViewById(R.id.etConversationCount)
         etGroupConversationCount = findViewById(R.id.etGroupConversationCount)
         btnGenerate = findViewById(R.id.btnGenerate)
+        btnCancel = findViewById(R.id.btnCancel)
         testProgressBar = findViewById(R.id.testProgressBar)
         tvTestLog = findViewById(R.id.tvTestLog)
         scrollTestLog = findViewById(R.id.scrollTestLog)
@@ -81,6 +84,10 @@ class TestActivity : AppCompatActivity() {
         btnTestStartDate.setOnClickListener { showDatePicker(isStart = true) }
         btnTestEndDate.setOnClickListener { showDatePicker(isStart = false) }
         btnBack.setOnClickListener { finish() }
+        btnCancel.setOnClickListener {
+            generateJob?.cancel()
+            appendLog("Cancelled.")
+        }
 
         btnGenerate.setOnClickListener {
             val smsCount = etSmsCount.text.toString().toIntOrNull() ?: 0
@@ -107,6 +114,7 @@ class TestActivity : AppCompatActivity() {
         logBuilder.clear()
         tvTestLog.text = ""
         btnGenerate.isEnabled = false
+        btnCancel.isEnabled = true
         testProgressBar.visibility = View.VISIBLE
 
         val generator = TestMessageGenerator(contentResolver, this)
@@ -125,12 +133,15 @@ class TestActivity : AppCompatActivity() {
                     appendLog(line)
                 }
                 appendLog("Generation complete!")
+            } catch (_: CancellationException) {
+                // handled by cancel button click
             } catch (e: Exception) {
                 appendLog("Error: ${e.message}")
             }
 
             withContext(Dispatchers.Main) {
                 btnGenerate.isEnabled = true
+                btnCancel.isEnabled = false
                 testProgressBar.visibility = View.GONE
             }
         }

@@ -128,14 +128,32 @@
                 android:minHeight="@dimen/min_touch_target" />
         </com.google.android.material.textfield.TextInputLayout>
 
-        <!-- Generate Button -->
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnGenerate"
+        <!-- Generate / Cancel Buttons -->
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:minHeight="@dimen/min_touch_target"
-            android:text="@string/btn_generate"
-            android:layout_marginBottom="@dimen/item_spacing" />
+            android:orientation="horizontal"
+            android:layout_marginBottom="@dimen/item_spacing">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnGenerate"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginEnd="8dp"
+                android:minHeight="@dimen/min_touch_target"
+                android:text="@string/btn_generate" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnCancel"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:enabled="false"
+                android:minHeight="@dimen/min_touch_target"
+                android:text="@string/btn_stop" />
+        </LinearLayout>
 
         <!-- Progress -->
         <com.google.android.material.progressindicator.LinearProgressIndicator
