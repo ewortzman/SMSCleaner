@@ -396,8 +396,9 @@ class MessageCleaner(
         )
     }
 
-    private fun deleteBatchByIds(uri: Uri, ids: List<Long>) {
+    private suspend fun deleteBatchByIds(uri: Uri, ids: List<Long>) {
         for (chunk in ids.chunked(DELETE_CHUNK_SIZE)) {
+            coroutineContext.ensureActive()
             val idList = chunk.joinToString(",")
             contentResolver.delete(uri, "_id IN ($idList)", null)
         }
