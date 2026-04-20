@@ -163,12 +163,15 @@ class MessageCleaner(
                 val address = getMmsAddress(id) ?: "unknown"
                 addressMap[threadId] = address
 
-                val shouldInclude = (config.includeMmsMedia && hasMedia) ||
-                        (config.includeMmsGroup && isGroup && !hasMedia)
+                // Media check takes priority: if it has media attachments, it's a media MMS.
+                // Otherwise, if it has multiple recipients, it's a group MMS.
+                val isMediaMatch = hasMedia && config.includeMmsMedia
+                val isGroupMatch = isGroup && !hasMedia && config.includeMmsGroup
+                val shouldInclude = isMediaMatch || isGroupMatch
 
                 if (shouldInclude) {
                     idsToDelete.add(id)
-                    if (hasMedia) {
+                    if (isMediaMatch) {
                         mediaConversations.getOrPut(threadId) { mutableListOf() }.add(id)
                     } else {
                         groupConversations.getOrPut(threadId) { mutableListOf() }.add(id)
@@ -262,14 +265,17 @@ class MessageCleaner(
                 arrayOf("address", "type"),
                 null, null, null
             )?.use { cursor ->
-                val addresses = mutableSetOf<String>()
+                val recipients = mutableSetOf<String>()
                 while (cursor.moveToNext()) {
                     val addr = cursor.getString(0) ?: continue
                     val type = cursor.getInt(1)
-                    if (type == 151) continue // 151 = from, skip sender
-                    addresses.add(addr)
+                    // 137 = FROM (sender), skip it. Count TO (151) and other recipient types.
+                    if (type == 137) continue
+                    if (addr.isNotBlank() && addr != "insert-address-token") {
+                        recipients.add(addr)
+                    }
                 }
-                addresses.size > 1
+                recipients.size > 1
             } ?: false
         } catch (_: Exception) {
             false
@@ -292,6 +298,15 @@ class MessageCleaner(
     }
 
     private fun deleteBatch(uri: Uri, ids: List<Long>) {
+        val isMms = uri == Telephony.Mms.CONTENT_URI
+        if (isMms) {
+            for (id in ids) {
+                // Delete parts (and their backing media files) before deleting the MMS record
+                try {
+                    contentResolver.delete(Uri.parse("content://mms/$id/part"), null, null)
+                } catch (_: Exception) { }
+            }
+        }
         val idList = ids.joinToString(",")
         contentResolver.delete(uri, "_id IN ($idList)", null)
     }
