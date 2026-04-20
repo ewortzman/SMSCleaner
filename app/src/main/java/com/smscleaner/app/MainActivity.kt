@@ -83,6 +83,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.apply {
+            statusBarColor = android.graphics.Color.BLACK
+            navigationBarColor = android.graphics.Color.BLACK
+        }
         setContentView(R.layout.activity_main)
 
         viewModel = ViewModelProvider(this)[CleanerViewModel::class.java]

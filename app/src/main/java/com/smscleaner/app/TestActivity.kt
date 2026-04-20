@@ -49,6 +49,10 @@ class TestActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.apply {
+            statusBarColor = android.graphics.Color.BLACK
+            navigationBarColor = android.graphics.Color.BLACK
+        }
         setContentView(R.layout.activity_test)
 
         bindViews()
