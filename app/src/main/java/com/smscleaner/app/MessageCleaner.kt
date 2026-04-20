@@ -291,7 +291,8 @@ class MessageCleaner(
         while (ids.size >= batchSize) {
             val batch = ids.subList(0, batchSize).toList()
             val batchDates = dates.subList(0, batchSize).toList()
-            repeat(batchSize) { ids.removeFirst(); dates.removeFirst() }
+            ids.subList(0, batchSize).clear()
+            dates.subList(0, batchSize).clear()
 
             totalFound += batch.size
             val dateRange = formatDateRange(batchDates.min(), batchDates.max())
