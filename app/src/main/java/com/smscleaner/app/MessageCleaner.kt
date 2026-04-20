@@ -116,9 +116,13 @@ class MessageCleaner(
             var batchMinDate = Long.MAX_VALUE
             var batchMaxDate = Long.MIN_VALUE
             var batchBytes = 0L
+            val projection = if (config.dryRun)
+                arrayOf(Telephony.Sms._ID, Telephony.Sms.THREAD_ID, Telephony.Sms.ADDRESS, "date", Telephony.Sms.BODY)
+            else
+                arrayOf(Telephony.Sms._ID, Telephony.Sms.THREAD_ID, Telephony.Sms.ADDRESS, "date")
             contentResolver.query(
                 uri,
-                arrayOf(Telephony.Sms._ID, Telephony.Sms.THREAD_ID, Telephony.Sms.ADDRESS, "date", Telephony.Sms.BODY),
+                projection,
                 selection,
                 selectionArgs,
                 "date $sortDirection LIMIT ${config.batchSize} OFFSET $offset"
@@ -132,12 +136,13 @@ class MessageCleaner(
                     val threadId = cursor.getString(1) ?: "unknown"
                     val address = cursor.getString(2) ?: "unknown"
                     val date = cursor.getLong(3)
-                    val body = cursor.getString(4)
                     ids.add(id)
                     if (date < batchMinDate) batchMinDate = date
                     if (date > batchMaxDate) batchMaxDate = date
-                    // ~row overhead (address, timestamps, indexes) + body bytes
-                    batchBytes += ROW_OVERHEAD + (body?.toByteArray()?.size ?: 0)
+                    if (config.dryRun) {
+                        val body = cursor.getString(4)
+                        batchBytes += ROW_OVERHEAD + (body?.toByteArray()?.size ?: 0)
+                    }
                     conversationMap.getOrPut(threadId) { mutableListOf() }.add(id)
                     addressMap[threadId] = address
                 }
@@ -150,9 +155,10 @@ class MessageCleaner(
 
             val dateRange = formatDateRange(batchMinDate, batchMaxDate)
             if (ids.isNotEmpty() && !config.dryRun) {
-                deleteBatch(uri, ids)
-                totalProcessed += ids.size
-                onLog("SMS batch: deleted ${ids.size} messages ($dateRange) [total: $totalProcessed]")
+                // Delete by date range — single call, much faster than per-ID
+                val deleteCount = deleteByDateRange(uri, "date", batchMinDate, batchMaxDate)
+                totalProcessed += deleteCount
+                onLog("SMS batch: deleted $deleteCount messages ($dateRange) [total: $totalProcessed]")
                 offset = 0
             } else if (ids.isNotEmpty()) {
                 totalProcessed += ids.size
@@ -217,22 +223,21 @@ class MessageCleaner(
             for (row in batchRows) {
                 coroutineContext.ensureActive()
 
-                val hasMedia = mmsHasMedia(row.id)
-                val isGroup = mmsIsGroup(row.id)
-                val address = getMmsAddress(row.id) ?: "unknown"
+                // Single parts query: get media status + size in one call
+                val (hasMedia, partSize) = classifyMmsParts(row.id, config.dryRun)
+                // Single addr query: get group status + address in one call
+                val (isGroup, address) = classifyMmsAddr(row.id)
                 addressMap[row.threadId] = address
 
                 val isMediaMatch = hasMedia && config.includeMmsMedia
                 val isGroupMatch = isGroup && !hasMedia && config.includeMmsGroup
 
                 if (isMediaMatch) {
-                    val partSize = getMmsPartSize(row.id)
                     mediaBytes += partSize
                     mediaIds.add(row.id)
                     mediaDates.add(row.dateSec * 1000)
                     mediaConversations.getOrPut(row.threadId) { mutableListOf() }.add(row.id)
                 } else if (isGroupMatch) {
-                    val partSize = getMmsPartSize(row.id)
                     groupBytes += partSize
                     groupIds.add(row.id)
                     groupDates.add(row.dateSec * 1000)
@@ -298,7 +303,7 @@ class MessageCleaner(
             val dateRange = formatDateRange(batchDates.min(), batchDates.max())
 
             if (!config.dryRun) {
-                deleteBatch(uri, batch)
+                deleteBatchByIds(uri, batch)
                 totalProcessed += batch.size
                 onLog("$label batch: deleted ${batch.size} messages ($dateRange) [total: $totalProcessed]")
             } else {
@@ -323,111 +328,75 @@ class MessageCleaner(
         }
     }
 
-    private fun mmsHasMedia(mmsId: Long): Boolean {
+    // Returns (hasMedia, estimatedSizeBytes) in a single parts query
+    private fun classifyMmsParts(mmsId: Long, calcSize: Boolean): Pair<Boolean, Long> {
         val partUri = Uri.parse("content://mms/$mmsId/part")
-        return try {
-            contentResolver.query(
-                partUri,
-                arrayOf("ct"),
-                null, null, null
-            )?.use { cursor ->
+        var hasMedia = false
+        var size = 0L
+        try {
+            val projection = if (calcSize) arrayOf("_id", "_data", "ct", "text") else arrayOf("ct")
+            contentResolver.query(partUri, projection, null, null, null)?.use { cursor ->
                 while (cursor.moveToNext()) {
-                    val contentType = cursor.getString(0) ?: continue
-                    if (contentType.startsWith("image/") ||
-                        contentType.startsWith("video/") ||
-                        contentType.startsWith("audio/")
-                    ) {
-                        return@use true
+                    val ct = cursor.getString(cursor.getColumnIndexOrThrow("ct")) ?: ""
+                    val isMedia = ct.startsWith("image/") || ct.startsWith("video/") || ct.startsWith("audio/")
+                    if (isMedia) hasMedia = true
+                    if (calcSize) {
+                        if (isMedia) {
+                            val data = cursor.getString(cursor.getColumnIndexOrThrow("_data"))
+                            if (data != null) {
+                                try {
+                                    val partId = cursor.getLong(cursor.getColumnIndexOrThrow("_id"))
+                                    contentResolver.openAssetFileDescriptor(
+                                        Uri.parse("content://mms/part/$partId"), "r"
+                                    )?.use { afd -> size += afd.length.let { if (it >= 0) it else 0L } }
+                                } catch (_: Exception) { }
+                            }
+                        } else {
+                            val text = cursor.getString(cursor.getColumnIndexOrThrow("text"))
+                            size += text?.toByteArray()?.size?.toLong() ?: 0L
+                        }
+                    } else if (hasMedia) {
+                        break
                     }
                 }
-                false
-            } ?: false
-        } catch (_: Exception) {
-            false
-        }
+            }
+        } catch (_: Exception) { }
+        return hasMedia to (size + ROW_OVERHEAD)
     }
 
-    private fun mmsIsGroup(mmsId: Long): Boolean {
+    // Returns (isGroup, firstAddress) in a single addr query
+    private fun classifyMmsAddr(mmsId: Long): Pair<Boolean, String> {
         val addrUri = Uri.parse("content://mms/$mmsId/addr")
-        return try {
-            contentResolver.query(
-                addrUri,
-                arrayOf("address", "type"),
-                null, null, null
-            )?.use { cursor ->
+        var firstAddress = "unknown"
+        try {
+            contentResolver.query(addrUri, arrayOf("address", "type"), null, null, null)?.use { cursor ->
                 val recipients = mutableSetOf<String>()
                 while (cursor.moveToNext()) {
                     val addr = cursor.getString(0) ?: continue
                     val type = cursor.getInt(1)
-                    // 137 = FROM (sender), skip it. Count TO (151) and other recipient types.
+                    if (firstAddress == "unknown" && addr.isNotBlank() && addr != "insert-address-token") {
+                        firstAddress = addr
+                    }
                     if (type == 137) continue
                     if (addr.isNotBlank() && addr != "insert-address-token") {
                         recipients.add(addr)
                     }
                 }
-                recipients.size > 1
-            } ?: false
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    private fun getMmsPartSize(mmsId: Long): Long {
-        val partUri = Uri.parse("content://mms/$mmsId/part")
-        var size = 0L
-        try {
-            contentResolver.query(
-                partUri,
-                arrayOf("_id", "_data", "ct", "text"),
-                null, null, null
-            )?.use { cursor ->
-                while (cursor.moveToNext()) {
-                    val partId = cursor.getLong(0)
-                    val data = cursor.getString(1)
-                    val ct = cursor.getString(2) ?: ""
-                    val text = cursor.getString(3)
-                    if (data != null && (ct.startsWith("image/") || ct.startsWith("video/") || ct.startsWith("audio/"))) {
-                        // Try to get actual file size via content provider
-                        try {
-                            val pUri = Uri.parse("content://mms/part/$partId")
-                            contentResolver.openAssetFileDescriptor(pUri, "r")?.use { afd ->
-                                size += afd.length.let { if (it >= 0) it else 0L }
-                            }
-                        } catch (_: Exception) { }
-                    } else {
-                        size += text?.toByteArray()?.size?.toLong() ?: 0L
-                    }
-                }
+                return recipients.size > 1 to firstAddress
             }
         } catch (_: Exception) { }
-        return size + ROW_OVERHEAD
+        return false to firstAddress
     }
 
-    private fun getMmsAddress(mmsId: Long): String? {
-        val addrUri = Uri.parse("content://mms/$mmsId/addr")
-        return try {
-            contentResolver.query(
-                addrUri,
-                arrayOf("address"),
-                null, null, null
-            )?.use { cursor ->
-                if (cursor.moveToFirst()) cursor.getString(0) else null
-            }
-        } catch (_: Exception) {
-            null
-        }
+    private fun deleteByDateRange(uri: Uri, dateCol: String, minDate: Long, maxDate: Long): Int {
+        return contentResolver.delete(
+            uri,
+            "$dateCol >= ? AND $dateCol <= ?",
+            arrayOf(minDate.toString(), maxDate.toString())
+        )
     }
 
-    private fun deleteBatch(uri: Uri, ids: List<Long>) {
-        val isMms = uri == Telephony.Mms.CONTENT_URI
-        if (isMms) {
-            for (id in ids) {
-                try {
-                    contentResolver.delete(Uri.parse("content://mms/$id/part"), null, null)
-                } catch (_: Exception) { }
-            }
-        }
-        // Delete in sub-batches to avoid oversized IN clauses and provider timeouts
+    private fun deleteBatchByIds(uri: Uri, ids: List<Long>) {
         for (chunk in ids.chunked(DELETE_CHUNK_SIZE)) {
             val idList = chunk.joinToString(",")
             contentResolver.delete(uri, "_id IN ($idList)", null)
