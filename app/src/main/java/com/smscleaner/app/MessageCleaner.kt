@@ -55,20 +55,26 @@ class MessageCleaner(
         totalProcessed = 0
         totalSizeBytes = 0L
 
-        if (config.includeSms) {
-            processSmsMessages()
-        }
+        try {
+            if (config.includeSms) {
+                processSmsMessages()
+            }
 
-        if (config.includeMmsMedia || config.includeMmsGroup) {
-            processMmsMessages()
-        }
+            if (config.includeMmsMedia || config.includeMmsGroup) {
+                processMmsMessages()
+            }
 
-        if (config.includeRcs) {
-            processRcsMessages()
-        }
+            if (config.includeRcs) {
+                processRcsMessages()
+            }
 
-        val action = if (config.dryRun) "found" else "deleted"
-        onLog("--- Complete: $totalProcessed messages $action (~${formatSize(totalSizeBytes)}) ---")
+            val action = if (config.dryRun) "found" else "deleted"
+            onLog("--- Complete: $totalProcessed messages $action (~${formatSize(totalSizeBytes)}) ---")
+        } catch (_: kotlinx.coroutines.CancellationException) {
+            val action = if (config.dryRun) "found so far" else "deleted so far"
+            onLog("--- Cancelled: $totalProcessed messages $action (~${formatSize(totalSizeBytes)}) ---")
+            throw kotlinx.coroutines.CancellationException("cancelled")
+        }
         return totalProcessed
     }
 

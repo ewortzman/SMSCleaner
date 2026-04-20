@@ -58,16 +58,11 @@ class CleanerViewModel(application: Application) : AndroidViewModel(application)
                     _isRunButtonEnabled.value = true
                     _isRunning.value = false
                 }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                appendLogFromBackground("Dry run cancelled.")
-                withContext(Dispatchers.Main) {
-                    _isRunning.value = false
-                }
+            } catch (_: kotlinx.coroutines.CancellationException) {
+                _isRunning.postValue(false)
             } catch (e: Exception) {
                 appendLogFromBackground("Error: ${e.message}")
-                withContext(Dispatchers.Main) {
-                    _isRunning.value = false
-                }
+                _isRunning.postValue(false)
             }
         }
     }
@@ -98,16 +93,11 @@ class CleanerViewModel(application: Application) : AndroidViewModel(application)
                     _isRunButtonEnabled.value = false
                     _isRunning.value = false
                 }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                appendLogFromBackground("Deletion cancelled.")
-                withContext(Dispatchers.Main) {
-                    _isRunning.value = false
-                }
+            } catch (_: kotlinx.coroutines.CancellationException) {
+                _isRunning.postValue(false)
             } catch (e: Exception) {
                 appendLogFromBackground("Error: ${e.message}")
-                withContext(Dispatchers.Main) {
-                    _isRunning.value = false
-                }
+                _isRunning.postValue(false)
             }
         }
     }
