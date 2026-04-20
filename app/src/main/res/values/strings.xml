@@ -23,7 +23,8 @@
     <string name="sms_count">SMS Messages</string>
     <string name="mms_media_count">MMS Media Messages</string>
     <string name="mms_group_count">MMS Group Messages</string>
-    <string name="conversation_count">Number of Conversations</string>
+    <string name="conversation_count">SMS / Media Conversations</string>
+    <string name="group_conversation_count">Group Conversations</string>
     <string name="no_date_selected">Not set</string>
     <string name="run_disabled_hint">Run a dry run first to enable</string>
     <string name="default_sms_required">This app must be set as default SMS app to modify messages.</string>

@@ -29,6 +29,7 @@ class TestActivity : AppCompatActivity() {
     private lateinit var btnTestStartDate: MaterialButton
     private lateinit var btnTestEndDate: MaterialButton
     private lateinit var etConversationCount: TextInputEditText
+    private lateinit var etGroupConversationCount: TextInputEditText
     private lateinit var btnGenerate: MaterialButton
     private lateinit var testProgressBar: LinearProgressIndicator
     private lateinit var tvTestLog: MaterialTextView
@@ -68,6 +69,7 @@ class TestActivity : AppCompatActivity() {
         btnTestStartDate = findViewById(R.id.btnTestStartDate)
         btnTestEndDate = findViewById(R.id.btnTestEndDate)
         etConversationCount = findViewById(R.id.etConversationCount)
+        etGroupConversationCount = findViewById(R.id.etGroupConversationCount)
         btnGenerate = findViewById(R.id.btnGenerate)
         testProgressBar = findViewById(R.id.testProgressBar)
         tvTestLog = findViewById(R.id.tvTestLog)
@@ -85,6 +87,7 @@ class TestActivity : AppCompatActivity() {
             val mmsMediaCount = etMmsMediaCount.text.toString().toIntOrNull() ?: 0
             val mmsGroupCount = etMmsGroupCount.text.toString().toIntOrNull() ?: 0
             val conversationCount = etConversationCount.text.toString().toIntOrNull() ?: 5
+            val groupConversationCount = etGroupConversationCount.text.toString().toIntOrNull() ?: 3
 
             if (smsCount == 0 && mmsMediaCount == 0 && mmsGroupCount == 0) {
                 Toast.makeText(this, "Enter at least one message count", Toast.LENGTH_SHORT).show()
@@ -96,11 +99,11 @@ class TestActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
 
-            startGeneration(smsCount, mmsMediaCount, mmsGroupCount, conversationCount)
+            startGeneration(smsCount, mmsMediaCount, mmsGroupCount, conversationCount, groupConversationCount)
         }
     }
 
-    private fun startGeneration(smsCount: Int, mmsMediaCount: Int, mmsGroupCount: Int, conversationCount: Int) {
+    private fun startGeneration(smsCount: Int, mmsMediaCount: Int, mmsGroupCount: Int, conversationCount: Int, groupConversationCount: Int) {
         logBuilder.clear()
         tvTestLog.text = ""
         btnGenerate.isEnabled = false
@@ -115,6 +118,7 @@ class TestActivity : AppCompatActivity() {
                     mmsMediaCount = mmsMediaCount,
                     mmsGroupCount = mmsGroupCount,
                     conversationCount = conversationCount.coerceAtLeast(1),
+                    groupConversationCount = groupConversationCount.coerceAtLeast(1),
                     startDateMs = startDateMs!!,
                     endDateMs = endDateMs!!
                 ) { line ->

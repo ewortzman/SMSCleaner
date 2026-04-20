@@ -68,6 +68,7 @@ class TestMessageGenerator(
         mmsMediaCount: Int,
         mmsGroupCount: Int,
         conversationCount: Int,
+        groupConversationCount: Int,
         startDateMs: Long,
         endDateMs: Long,
         onLog: (String) -> Unit
@@ -82,13 +83,22 @@ class TestMessageGenerator(
         }
 
         if (mmsMediaCount > 0) {
-            onLog("Generating $mmsMediaCount MMS media messages...")
+            onLog("Generating $mmsMediaCount MMS media messages across $conversationCount conversations...")
             generateMmsMediaMessages(mmsMediaCount, phoneNumbers, startDateMs, endDateMs, onLog)
         }
 
         if (mmsGroupCount > 0) {
-            onLog("Generating $mmsGroupCount MMS group messages...")
-            generateMmsGroupMessages(mmsGroupCount, phoneNumbers, startDateMs, endDateMs, onLog)
+            // Build a separate pool of phone numbers for group members
+            val groupPool = (1..(conversationCount + 5)).map { i ->
+                "+1555%07d".format(2000 + i)
+            }
+            // Pre-generate fixed group combos so messages reuse the same threads
+            val groupCombos = (1..groupConversationCount).map {
+                val size = Random.nextInt(2, minOf(5, groupPool.size) + 1)
+                groupPool.shuffled().take(size)
+            }
+            onLog("Generating $mmsGroupCount MMS group messages across $groupConversationCount group conversations...")
+            generateMmsGroupMessages(mmsGroupCount, groupCombos, startDateMs, endDateMs, onLog)
         }
     }
 
@@ -203,7 +213,7 @@ class TestMessageGenerator(
 
     private fun generateMmsGroupMessages(
         count: Int,
-        phoneNumbers: List<String>,
+        groupCombos: List<List<String>>,
         startDateMs: Long,
         endDateMs: Long,
         onLog: (String) -> Unit
@@ -214,9 +224,7 @@ class TestMessageGenerator(
             val timestampSec = timestamp / 1000
 
             try {
-                val groupSize = Random.nextInt(2, minOf(5, phoneNumbers.size) + 1)
-                val groupMembers = phoneNumbers.shuffled().take(groupSize)
-
+                val groupMembers = groupCombos[i % groupCombos.size]
                 val recipientSet = groupMembers.toHashSet()
                 val threadId = Telephony.Threads.getOrCreateThreadId(context, recipientSet)
 

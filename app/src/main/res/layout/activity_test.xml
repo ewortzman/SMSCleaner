@@ -99,7 +99,7 @@
         <com.google.android.material.textfield.TextInputLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="@dimen/section_spacing"
+            android:layout_marginBottom="@dimen/item_spacing"
             android:hint="@string/conversation_count"
             style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
 
@@ -109,6 +109,22 @@
                 android:layout_height="wrap_content"
                 android:inputType="number"
                 android:text="5"
+                android:minHeight="@dimen/min_touch_target" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <com.google.android.material.textfield.TextInputLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="@dimen/section_spacing"
+            android:hint="@string/group_conversation_count"
+            style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/etGroupConversationCount"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="number"
+                android:text="3"
                 android:minHeight="@dimen/min_touch_target" />
         </com.google.android.material.textfield.TextInputLayout>
 
