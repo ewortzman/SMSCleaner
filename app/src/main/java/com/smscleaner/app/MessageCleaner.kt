@@ -9,6 +9,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlin.coroutines.coroutineContext
 
+enum class DeleteOrder { OLDEST_FIRST, NEWEST_FIRST }
+
 data class CleanerConfig(
     val startDateMs: Long?,
     val endDateMs: Long?,
@@ -18,7 +20,8 @@ data class CleanerConfig(
     val includeRcs: Boolean,
     val batchSize: Int,
     val delayMs: Long,
-    val dryRun: Boolean
+    val dryRun: Boolean,
+    val deleteOrder: DeleteOrder = DeleteOrder.OLDEST_FIRST
 )
 
 data class ConversationSummary(
@@ -37,6 +40,7 @@ class MessageCleaner(
 
     private var totalFound = 0
     private var totalProcessed = 0
+    private val sortDirection = if (config.deleteOrder == DeleteOrder.OLDEST_FIRST) "ASC" else "DESC"
 
     suspend fun execute(): Int {
         totalFound = 0
@@ -80,7 +84,7 @@ class MessageCleaner(
                 arrayOf(Telephony.Sms._ID, Telephony.Sms.THREAD_ID, Telephony.Sms.ADDRESS),
                 selection,
                 selectionArgs,
-                "${Telephony.Sms._ID} ASC LIMIT ${config.batchSize} OFFSET $offset"
+                "date $sortDirection LIMIT ${config.batchSize} OFFSET $offset"
             )?.use { cursor ->
                 if (cursor.count == 0) {
                     hasMore = false
@@ -141,7 +145,7 @@ class MessageCleaner(
                 arrayOf(Telephony.Mms._ID, Telephony.Mms.THREAD_ID),
                 selection,
                 selectionArgs,
-                "${Telephony.Mms._ID} ASC LIMIT ${config.batchSize} OFFSET $offset"
+                "date $sortDirection LIMIT ${config.batchSize} OFFSET $offset"
             )?.use { cursor ->
                 if (cursor.count == 0) {
                     hasMore = false

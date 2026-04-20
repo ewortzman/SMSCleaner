@@ -43,6 +43,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var cbRcs: MaterialCheckBox
     private lateinit var etBatchSize: TextInputEditText
     private lateinit var etBatchDelay: TextInputEditText
+    private lateinit var toggleDeleteOrder: com.google.android.material.button.MaterialButtonToggleGroup
     private lateinit var btnDryRun: MaterialButton
     private lateinit var btnRun: MaterialButton
     private lateinit var btnStop: MaterialButton
@@ -104,6 +105,7 @@ class MainActivity : AppCompatActivity() {
         cbRcs = findViewById(R.id.cbRcs)
         etBatchSize = findViewById(R.id.etBatchSize)
         etBatchDelay = findViewById(R.id.etBatchDelay)
+        toggleDeleteOrder = findViewById(R.id.toggleDeleteOrder)
         btnDryRun = findViewById(R.id.btnDryRun)
         btnRun = findViewById(R.id.btnRun)
         btnStop = findViewById(R.id.btnStop)
@@ -150,6 +152,10 @@ class MainActivity : AppCompatActivity() {
         }
         etBatchSize.addTextChangedListener(textWatcher)
         etBatchDelay.addTextChangedListener(textWatcher)
+
+        toggleDeleteOrder.addOnButtonCheckedListener { _, _, _ ->
+            if (!suppressSettingsChange) onSettingsChanged()
+        }
 
         btnDryRun.setOnClickListener {
             val config = buildConfig() ?: return@setOnClickListener
@@ -209,6 +215,8 @@ class MainActivity : AppCompatActivity() {
 
         val batchSize = etBatchSize.text.toString().toIntOrNull() ?: 1000
         val delayMs = etBatchDelay.text.toString().toLongOrNull() ?: 500L
+        val deleteOrder = if (toggleDeleteOrder.checkedButtonId == R.id.btnNewestFirst)
+            DeleteOrder.NEWEST_FIRST else DeleteOrder.OLDEST_FIRST
 
         return CleanerConfig(
             startDateMs = startDateMs,
@@ -219,7 +227,8 @@ class MainActivity : AppCompatActivity() {
             includeRcs = cbRcs.isChecked,
             batchSize = batchSize.coerceAtLeast(1),
             delayMs = delayMs.coerceAtLeast(0),
-            dryRun = true
+            dryRun = true,
+            deleteOrder = deleteOrder
         )
     }
 

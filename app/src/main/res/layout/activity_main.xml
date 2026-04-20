@@ -190,6 +190,42 @@
                 android:minHeight="@dimen/min_touch_target" />
         </com.google.android.material.textfield.TextInputLayout>
 
+        <!-- Delete Order -->
+        <com.google.android.material.textview.MaterialTextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/delete_order"
+            android:textAppearance="?attr/textAppearanceTitleSmall"
+            android:layout_marginBottom="@dimen/item_spacing" />
+
+        <com.google.android.material.button.MaterialButtonToggleGroup
+            android:id="@+id/toggleDeleteOrder"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="@dimen/section_spacing"
+            app:singleSelection="true"
+            app:selectionRequired="true"
+            app:checkedButton="@id/btnOldestFirst">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnOldestFirst"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:minHeight="@dimen/min_touch_target"
+                android:text="@string/oldest_first" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnNewestFirst"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:minHeight="@dimen/min_touch_target"
+                android:text="@string/newest_first" />
+        </com.google.android.material.button.MaterialButtonToggleGroup>
+
         <!-- Actions Section -->
         <com.google.android.material.textview.MaterialTextView
             android:layout_width="wrap_content"

@@ -35,6 +35,9 @@
     <string name="section_actions">Actions</string>
     <string name="section_log">Log Output</string>
     <string name="compose_not_supported">SMS Cleaner is a cleanup utility.\nComposing messages is not supported.</string>
+    <string name="delete_order">Delete Order</string>
+    <string name="oldest_first">Oldest First</string>
+    <string name="newest_first">Newest First</string>
     <string name="date_range_required">At least one date (start or end) is required.</string>
     <string name="type_required">At least one message type must be selected.</string>
 </resources>
