@@ -44,6 +44,7 @@ class MessageCleaner(
 
     private var totalFound = 0
     private var totalProcessed = 0
+    private var totalSizeBytes = 0L
     private val sortDirection = if (config.deleteOrder == DeleteOrder.OLDEST_FIRST) "ASC" else "DESC"
     private val dateFmt = SimpleDateFormat("MMM dd, yyyy", Locale.US).apply {
         timeZone = TimeZone.getDefault()
@@ -52,6 +53,7 @@ class MessageCleaner(
     suspend fun execute(): Int {
         totalFound = 0
         totalProcessed = 0
+        totalSizeBytes = 0L
 
         if (config.includeSms) {
             processSmsMessages()
@@ -66,7 +68,7 @@ class MessageCleaner(
         }
 
         val action = if (config.dryRun) "found" else "deleted"
-        onLog("--- Complete: $totalProcessed messages $action ---")
+        onLog("--- Complete: $totalProcessed messages $action (~${formatSize(totalSizeBytes)}) ---")
         return totalProcessed
     }
 
@@ -78,6 +80,7 @@ class MessageCleaner(
 
         val conversationMap = mutableMapOf<String, MutableList<Long>>()
         val addressMap = mutableMapOf<String, String>()
+        var smsBytes = 0L
 
         var offset = 0
         var hasMore = true
@@ -88,9 +91,10 @@ class MessageCleaner(
             val ids = mutableListOf<Long>()
             var batchMinDate = Long.MAX_VALUE
             var batchMaxDate = Long.MIN_VALUE
+            var batchBytes = 0L
             contentResolver.query(
                 uri,
-                arrayOf(Telephony.Sms._ID, Telephony.Sms.THREAD_ID, Telephony.Sms.ADDRESS, "date"),
+                arrayOf(Telephony.Sms._ID, Telephony.Sms.THREAD_ID, Telephony.Sms.ADDRESS, "date", Telephony.Sms.BODY),
                 selection,
                 selectionArgs,
                 "date $sortDirection LIMIT ${config.batchSize} OFFSET $offset"
@@ -104,9 +108,12 @@ class MessageCleaner(
                     val threadId = cursor.getString(1) ?: "unknown"
                     val address = cursor.getString(2) ?: "unknown"
                     val date = cursor.getLong(3)
+                    val body = cursor.getString(4)
                     ids.add(id)
                     if (date < batchMinDate) batchMinDate = date
                     if (date > batchMaxDate) batchMaxDate = date
+                    // ~row overhead (address, timestamps, indexes) + body bytes
+                    batchBytes += ROW_OVERHEAD + (body?.toByteArray()?.size ?: 0)
                     conversationMap.getOrPut(threadId) { mutableListOf() }.add(id)
                     addressMap[threadId] = address
                 }
@@ -114,6 +121,7 @@ class MessageCleaner(
             } ?: run { hasMore = false }
 
             totalFound += ids.size
+            smsBytes += batchBytes
             offset += ids.size
 
             val dateRange = formatDateRange(batchMinDate, batchMaxDate)
@@ -132,6 +140,9 @@ class MessageCleaner(
             }
         }
 
+        totalSizeBytes += smsBytes
+        val action = if (config.dryRun) "found" else "deleted"
+        onLog("SMS total: ${conversationMap.values.sumOf { it.size }} messages, ~${formatSize(smsBytes)} estimated")
         logConversationSummary("SMS", conversationMap, addressMap)
     }
 
@@ -146,6 +157,8 @@ class MessageCleaner(
         val addressMap = mutableMapOf<String, String>()
         val idsToDelete = mutableListOf<Long>()
         val datesToDelete = mutableListOf<Long>()
+        var mediaBytes = 0L
+        var groupBytes = 0L
 
         var offset = 0
         var hasMore = true
@@ -187,9 +200,12 @@ class MessageCleaner(
                 if (shouldInclude) {
                     idsToDelete.add(row.id)
                     datesToDelete.add(row.dateSec * 1000)
+                    val partSize = getMmsPartSize(row.id)
                     if (isMediaMatch) {
+                        mediaBytes += partSize
                         mediaConversations.getOrPut(row.threadId) { mutableListOf() }.add(row.id)
                     } else {
+                        groupBytes += partSize
                         groupConversations.getOrPut(row.threadId) { mutableListOf() }.add(row.id)
                     }
                 }
@@ -232,9 +248,13 @@ class MessageCleaner(
         }
 
         if (config.includeMmsMedia) {
+            totalSizeBytes += mediaBytes
+            onLog("MMS (media) total: ${mediaConversations.values.sumOf { it.size }} messages, ~${formatSize(mediaBytes)}")
             logConversationSummary("MMS (media)", mediaConversations, addressMap)
         }
         if (config.includeMmsGroup) {
+            totalSizeBytes += groupBytes
+            onLog("MMS (group) total: ${groupConversations.values.sumOf { it.size }} messages, ~${formatSize(groupBytes)}")
             logConversationSummary("MMS (group)", groupConversations, addressMap)
         }
     }
@@ -300,6 +320,37 @@ class MessageCleaner(
         } catch (_: Exception) {
             false
         }
+    }
+
+    private fun getMmsPartSize(mmsId: Long): Long {
+        val partUri = Uri.parse("content://mms/$mmsId/part")
+        var size = 0L
+        try {
+            contentResolver.query(
+                partUri,
+                arrayOf("_id", "_data", "ct", "text"),
+                null, null, null
+            )?.use { cursor ->
+                while (cursor.moveToNext()) {
+                    val partId = cursor.getLong(0)
+                    val data = cursor.getString(1)
+                    val ct = cursor.getString(2) ?: ""
+                    val text = cursor.getString(3)
+                    if (data != null && (ct.startsWith("image/") || ct.startsWith("video/") || ct.startsWith("audio/"))) {
+                        // Try to get actual file size via content provider
+                        try {
+                            val pUri = Uri.parse("content://mms/part/$partId")
+                            contentResolver.openAssetFileDescriptor(pUri, "r")?.use { afd ->
+                                size += afd.length.let { if (it >= 0) it else 0L }
+                            }
+                        } catch (_: Exception) { }
+                    } else {
+                        size += text?.toByteArray()?.size?.toLong() ?: 0L
+                    }
+                }
+            }
+        } catch (_: Exception) { }
+        return size + ROW_OVERHEAD
     }
 
     private fun getMmsAddress(mmsId: Long): String? {
@@ -379,5 +430,18 @@ class MessageCleaner(
                 onLog("  Thread $threadId | $label | ${ids.size} messages")
             }
         onLog("$type total: ${conversationMap.values.sumOf { it.size }} messages")
+    }
+
+    private fun formatSize(bytes: Long): String {
+        return when {
+            bytes >= 1_000_000_000 -> "%.1f GB".format(bytes / 1_000_000_000.0)
+            bytes >= 1_000_000 -> "%.1f MB".format(bytes / 1_000_000.0)
+            bytes >= 1_000 -> "%.1f KB".format(bytes / 1_000.0)
+            else -> "$bytes B"
+        }
+    }
+
+    companion object {
+        private const val ROW_OVERHEAD = 200L
     }
 }
