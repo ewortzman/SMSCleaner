@@ -383,7 +383,7 @@ class MessageCleaner(
                         recipients.add(addr)
                     }
                 }
-                return recipients.size > 1 to firstAddress
+                return (recipients.size > 1) to firstAddress
             }
         } catch (_: Exception) { }
         return false to firstAddress
