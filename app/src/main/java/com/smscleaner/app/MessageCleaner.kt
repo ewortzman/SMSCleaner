@@ -57,6 +57,8 @@ class MessageCleaner(
         totalProcessed = 0
         totalSizeBytes = 0L
 
+        logDatabaseTotals()
+
         try {
             if (config.includeSms) {
                 processSmsMessages()
@@ -78,6 +80,20 @@ class MessageCleaner(
             throw kotlinx.coroutines.CancellationException("cancelled")
         }
         return totalProcessed
+    }
+
+    private fun logDatabaseTotals() {
+        val smsCount = countRows(Telephony.Sms.CONTENT_URI)
+        val mmsCount = countRows(Telephony.Mms.CONTENT_URI)
+        onLog("Database totals: $smsCount SMS, $mmsCount MMS (${smsCount + mmsCount} total)")
+    }
+
+    private fun countRows(uri: Uri): Long {
+        return try {
+            contentResolver.query(uri, arrayOf("COUNT(*)"), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) cursor.getLong(0) else 0L
+            } ?: 0L
+        } catch (_: Exception) { 0L }
     }
 
     private suspend fun processSmsMessages() {
