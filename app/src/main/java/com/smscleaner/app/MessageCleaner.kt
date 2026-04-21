@@ -204,14 +204,14 @@ class MessageCleaner(
         log("=== Deleting SMS messages ===")
         log("SMS: $totalToDelete messages across ${scan.smsThreadMap.size} threads")
 
-        // Classify threads: whole vs partial
+        // Classify threads: whole vs partial using batch GROUP BY
         val wholeThreadIds = mutableListOf<String>()
         val partialThreads = mutableMapOf<String, List<Long>>()
         val countStart = System.currentTimeMillis()
+        val threadCounts = getThreadCounts(uri, scan.smsThreadMap.keys)
         for ((threadId, ids) in scan.smsThreadMap) {
-            coroutineContext.ensureActive()
-            val threadTotal = countWithSelection(uri, "thread_id = ?", arrayOf(threadId))
-            if (threadTotal > 0 && threadTotal.toInt() == ids.size) {
+            val threadTotal = threadCounts[threadId] ?: 0
+            if (threadTotal > 0 && threadTotal == ids.size) {
                 wholeThreadIds.add(threadId)
             } else {
                 partialThreads[threadId] = ids
@@ -243,10 +243,10 @@ class MessageCleaner(
             }
         }
 
-        // Phase 2: partial-thread deletes — per-message
+        // Phase 2: partial-thread deletes — per-message, grouped by thread for sequential access
         if (partialThreads.isNotEmpty()) {
             log("SMS Phase 2: deleting $partialCount messages from ${partialThreads.size} partial threads...")
-            val allPartialIds = partialThreads.values.flatten()
+            val allPartialIds = partialThreads.entries.sortedBy { it.key }.flatMap { it.value }
             for (batch in allPartialIds.chunked(config.batchSize)) {
                 coroutineContext.ensureActive()
                 val batchStart = System.currentTimeMillis()
@@ -323,18 +323,19 @@ class MessageCleaner(
 
                 if (isMediaMatch || isGroupMatch) {
                     matchCount++
-                    val address = getMmsAddress(row.id)
-                    result.addressMap[row.threadId.toString()] = address
+                    // Only look up address/size during dry run — not needed for delete
+                    if (config.dryRun) {
+                        val address = getMmsAddress(row.id)
+                        result.addressMap[row.threadId.toString()] = address
+                    }
 
                     if (isMediaMatch) {
-                        val partSize = getMmsPartSize(row.id)
-                        result.mediaBytes += partSize
+                        if (config.dryRun) result.mediaBytes += getMmsPartSize(row.id)
                         result.mediaIds.add(row.id)
                         result.mediaDates.add(row.dateSec * 1000)
                         result.mediaConversations.getOrPut(row.threadId.toString()) { mutableListOf() }.add(row.id)
                     } else {
-                        val partSize = getMmsPartSize(row.id)
-                        result.groupBytes += partSize
+                        if (config.dryRun) result.groupBytes += getMmsPartSize(row.id)
                         result.groupIds.add(row.id)
                         result.groupDates.add(row.dateSec * 1000)
                         result.groupConversations.getOrPut(row.threadId.toString()) { mutableListOf() }.add(row.id)
@@ -378,19 +379,20 @@ class MessageCleaner(
         log("=== Deleting $label messages ===")
         log("$label: $totalToDelete messages across ${conversations.size} threads")
 
-        // Phase 1: whole-thread deletes
+        // Phase 1: whole-thread deletes — classify using batch GROUP BY
         val wholeThreadIds = mutableListOf<String>()
-        val partialIds = mutableListOf<Long>()
+        val partialThreads = mutableMapOf<String, List<Long>>()
         val countStart = System.currentTimeMillis()
+        val threadCounts = getThreadCounts(uri, conversations.keys)
         for ((threadId, threadIds) in conversations) {
-            coroutineContext.ensureActive()
-            val threadTotal = countWithSelection(uri, "thread_id = ?", arrayOf(threadId))
-            if (threadTotal > 0 && threadTotal.toInt() == threadIds.size) {
+            val threadTotal = threadCounts[threadId] ?: 0
+            if (threadTotal > 0 && threadTotal == threadIds.size) {
                 wholeThreadIds.add(threadId)
             } else {
-                partialIds.addAll(threadIds)
+                partialThreads[threadId] = threadIds
             }
         }
+        val partialIds = partialThreads.entries.sortedBy { it.key }.flatMap { it.value }
         val wholeCount = wholeThreadIds.sumOf { conversations[it]!!.size }
         debugLog("$label thread classification: ${wholeThreadIds.size} whole ($wholeCount msgs), partial (${partialIds.size} msgs) in ${System.currentTimeMillis() - countStart}ms")
 
@@ -490,6 +492,35 @@ class MessageCleaner(
             debugLog("preloadGroupThreadIds failed: ${e.message}")
         }
         return groupIds
+    }
+
+    // ──────────────────── Thread Helpers ────────────────────
+
+    private fun getThreadCounts(uri: Uri, threadIds: Set<String>): Map<String, Int> {
+        val counts = mutableMapOf<String, Int>()
+        if (threadIds.isEmpty()) return counts
+        try {
+            for (chunk in threadIds.chunked(500)) {
+                val idList = chunk.joinToString(",")
+                contentResolver.query(
+                    uri,
+                    arrayOf("thread_id", "COUNT(*)"),
+                    "thread_id IN ($idList) GROUP BY thread_id",
+                    null, null
+                )?.use { cursor ->
+                    while (cursor.moveToNext()) {
+                        counts[cursor.getString(0)] = cursor.getInt(1)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            debugLog("Batch thread count failed: ${e.message}, falling back to per-thread")
+            for (threadId in threadIds) {
+                val count = countWithSelection(uri, "thread_id = ?", arrayOf(threadId))
+                counts[threadId] = count.toInt()
+            }
+        }
+        return counts
     }
 
     // ──────────────────── MMS Helpers ────────────────────
