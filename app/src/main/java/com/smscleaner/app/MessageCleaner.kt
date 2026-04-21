@@ -223,9 +223,9 @@ class MessageCleaner(
 
         var deletedSoFar = 0
 
-        // Whole-thread deletes — fast path
+        // Phase 1: whole-thread deletes — fast path
         if (wholeThreadIds.isNotEmpty()) {
-            log("SMS: deleting $wholeCount messages via ${wholeThreadIds.size} whole-thread deletes...")
+            log("SMS Phase 1: deleting $wholeCount messages via ${wholeThreadIds.size} whole-thread deletes...")
             for (threadId in wholeThreadIds) {
                 coroutineContext.ensureActive()
                 val threadStart = System.currentTimeMillis()
@@ -243,9 +243,9 @@ class MessageCleaner(
             }
         }
 
-        // Partial-thread deletes — per-message
+        // Phase 2: partial-thread deletes — per-message
         if (partialThreads.isNotEmpty()) {
-            log("SMS: deleting $partialCount messages from ${partialThreads.size} partial threads...")
+            log("SMS Phase 2: deleting $partialCount messages from ${partialThreads.size} partial threads...")
             val allPartialIds = partialThreads.values.flatten()
             for (batch in allPartialIds.chunked(config.batchSize)) {
                 coroutineContext.ensureActive()
@@ -373,20 +373,59 @@ class MessageCleaner(
         addressMap: Map<String, String>,
         batchSize: Int
     ) {
+        val uri = Telephony.Mms.CONTENT_URI
+        val totalToDelete = ids.size
         log("=== Deleting $label messages ===")
-        log("$label: ${ids.size} messages across ${conversations.size} threads")
+        log("$label: $totalToDelete messages across ${conversations.size} threads")
+
+        // Phase 1: whole-thread deletes
+        val wholeThreadIds = mutableListOf<String>()
+        val partialIds = mutableListOf<Long>()
+        val countStart = System.currentTimeMillis()
+        for ((threadId, threadIds) in conversations) {
+            coroutineContext.ensureActive()
+            val threadTotal = countWithSelection(uri, "thread_id = ?", arrayOf(threadId))
+            if (threadTotal > 0 && threadTotal.toInt() == threadIds.size) {
+                wholeThreadIds.add(threadId)
+            } else {
+                partialIds.addAll(threadIds)
+            }
+        }
+        val wholeCount = wholeThreadIds.sumOf { conversations[it]!!.size }
+        debugLog("$label thread classification: ${wholeThreadIds.size} whole ($wholeCount msgs), partial (${partialIds.size} msgs) in ${System.currentTimeMillis() - countStart}ms")
 
         var deletedSoFar = 0
-        for (batch in ids.chunked(batchSize)) {
-            coroutineContext.ensureActive()
-            val batchStart = System.currentTimeMillis()
-            log("$label: deleting ${batch.size} messages...")
-            val deleted = deleteWithProgress(label, Telephony.Mms.CONTENT_URI, batch, deletedSoFar)
-            deletedSoFar += deleted
-            totalProcessed += deleted
-            val batchElapsed = (System.currentTimeMillis() - batchStart) / 1000.0
-            log("$label: $deletedSoFar / ${ids.size} deleted [batch: %.1fs]".format(batchElapsed))
-            delay(config.delayMs)
+
+        if (wholeThreadIds.isNotEmpty()) {
+            log("$label Phase 1: deleting $wholeCount messages via ${wholeThreadIds.size} whole-thread deletes...")
+            for (threadId in wholeThreadIds) {
+                coroutineContext.ensureActive()
+                val threadStart = System.currentTimeMillis()
+                try {
+                    val deleted = contentResolver.delete(uri, "thread_id = ?", arrayOf(threadId))
+                    deletedSoFar += deleted
+                    totalProcessed += deleted
+                    debugLog("$label thread $threadId: deleted $deleted in ${System.currentTimeMillis() - threadStart}ms")
+                } catch (e: Exception) {
+                    debugLog("$label thread $threadId delete failed: ${e.message}")
+                }
+                log("  $label: $deletedSoFar / $totalToDelete deleted")
+            }
+        }
+
+        // Phase 2: per-message deletes for partial threads
+        if (partialIds.isNotEmpty()) {
+            log("$label Phase 2: deleting ${partialIds.size} messages from partial threads...")
+            for (batch in partialIds.chunked(batchSize)) {
+                coroutineContext.ensureActive()
+                val batchStart = System.currentTimeMillis()
+                val deleted = deleteWithProgress(label, uri, batch, deletedSoFar)
+                deletedSoFar += deleted
+                totalProcessed += deleted
+                val batchElapsed = (System.currentTimeMillis() - batchStart) / 1000.0
+                log("$label: $deletedSoFar / $totalToDelete deleted [batch: %.1fs]".format(batchElapsed))
+                delay(config.delayMs)
+            }
         }
 
         log("$label delete complete: $deletedSoFar deleted")
