@@ -49,6 +49,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var etDeleteChunkSize: TextInputEditText
     private lateinit var etBatchDelay: TextInputEditText
     private lateinit var toggleDeleteOrder: com.google.android.material.button.MaterialButtonToggleGroup
+    private lateinit var cbDebugLogging: MaterialCheckBox
     private lateinit var btnDryRun: MaterialButton
     private lateinit var btnRun: MaterialButton
     private lateinit var btnStop: MaterialButton
@@ -126,6 +127,7 @@ class MainActivity : AppCompatActivity() {
         etDeleteChunkSize = findViewById(R.id.etDeleteChunkSize)
         etBatchDelay = findViewById(R.id.etBatchDelay)
         toggleDeleteOrder = findViewById(R.id.toggleDeleteOrder)
+        cbDebugLogging = findViewById(R.id.cbDebugLogging)
         btnDryRun = findViewById(R.id.btnDryRun)
         btnRun = findViewById(R.id.btnRun)
         btnStop = findViewById(R.id.btnStop)
@@ -252,7 +254,8 @@ class MainActivity : AppCompatActivity() {
             deleteChunkSize = deleteChunkSize.coerceAtLeast(1),
             delayMs = delayMs.coerceAtLeast(0),
             dryRun = true,
-            deleteOrder = deleteOrder
+            deleteOrder = deleteOrder,
+            debugLogging = cbDebugLogging.isChecked
         )
     }
 

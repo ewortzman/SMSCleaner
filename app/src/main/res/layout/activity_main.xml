@@ -294,6 +294,16 @@
                 android:text="@string/newest_first" />
         </com.google.android.material.button.MaterialButtonToggleGroup>
 
+        <!-- Debug -->
+        <com.google.android.material.checkbox.MaterialCheckBox
+            android:id="@+id/cbDebugLogging"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="@dimen/min_touch_target"
+            android:layout_marginBottom="@dimen/section_spacing"
+            android:checked="false"
+            android:text="@string/debug_logging" />
+
         <!-- Actions Section -->
         <com.google.android.material.textview.MaterialTextView
             android:layout_width="wrap_content"

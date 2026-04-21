@@ -43,6 +43,7 @@
     <string name="delete_order">Delete Order</string>
     <string name="oldest_first">Oldest First</string>
     <string name="newest_first">Newest First</string>
+    <string name="debug_logging">Debug logging (timing &amp; extra detail)</string>
     <string name="date_range_required">At least one date (start or end) is required.</string>
     <string name="type_required">At least one message type must be selected.</string>
 </resources>

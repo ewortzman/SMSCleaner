@@ -1,7 +1,6 @@
 package com.smscleaner.app
 
 import android.app.Application
-import android.content.ContentResolver
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
@@ -27,10 +26,12 @@ class CleanerViewModel(application: Application) : AndroidViewModel(application)
 
     private var currentJob: Job? = null
     private val logBuilder = StringBuilder()
+    private var cachedScanResults: ScanResults? = null
 
     fun onSettingsChanged() {
         _isDryRunComplete.value = false
         _isRunButtonEnabled.value = false
+        cachedScanResults = null
     }
 
     fun startDryRun(config: CleanerConfig) {
@@ -51,6 +52,7 @@ class CleanerViewModel(application: Application) : AndroidViewModel(application)
                     appendLogFromBackground(line)
                 }
                 val count = cleaner.execute()
+                cachedScanResults = cleaner.getScanResults()
                 appendLogFromBackground("Dry run complete. $count messages would be deleted.")
 
                 withContext(Dispatchers.Main) {
@@ -78,6 +80,8 @@ class CleanerViewModel(application: Application) : AndroidViewModel(application)
         _isRunning.value = true
         _isRunButtonEnabled.value = false
 
+        val scanToUse = cachedScanResults
+
         currentJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 val resolver = getApplication<Application>().contentResolver
@@ -85,13 +89,14 @@ class CleanerViewModel(application: Application) : AndroidViewModel(application)
                 val cleaner = MessageCleaner(resolver, contactResolver, actualConfig) { line ->
                     appendLogFromBackground(line)
                 }
-                val count = cleaner.execute()
+                val count = cleaner.execute(previousScan = scanToUse)
                 appendLogFromBackground("Deletion complete. $count messages deleted.")
 
                 withContext(Dispatchers.Main) {
                     _isDryRunComplete.value = false
                     _isRunButtonEnabled.value = false
                     _isRunning.value = false
+                    cachedScanResults = null
                 }
             } catch (_: kotlinx.coroutines.CancellationException) {
                 _isRunning.postValue(false)

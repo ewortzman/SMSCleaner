@@ -2,10 +2,8 @@ package com.smscleaner.app
 
 import android.content.ContentProviderOperation
 import android.content.ContentResolver
-import android.database.Cursor
 import android.net.Uri
 import android.provider.Telephony
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import java.text.SimpleDateFormat
@@ -29,14 +27,18 @@ data class CleanerConfig(
     val deleteChunkSize: Int = 50,
     val delayMs: Long,
     val dryRun: Boolean,
-    val deleteOrder: DeleteOrder = DeleteOrder.OLDEST_FIRST
+    val deleteOrder: DeleteOrder = DeleteOrder.OLDEST_FIRST,
+    val debugLogging: Boolean = false
 )
 
-data class ConversationSummary(
-    val threadId: String,
-    val address: String,
-    val displayName: String,
-    val count: Int
+data class ScanResults(
+    val smsThreadMap: Map<String, List<Long>>,
+    val smsAddressMap: Map<String, String>,
+    val mediaMmsIds: List<Long>,
+    val mediaConversations: Map<String, List<Long>>,
+    val groupMmsIds: List<Long>,
+    val groupConversations: Map<String, List<Long>>,
+    val mmsAddressMap: Map<String, String>
 )
 
 class MessageCleaner(
@@ -46,48 +48,517 @@ class MessageCleaner(
     private val onLog: (String) -> Unit
 ) {
 
-    private var totalFound = 0
     private var totalProcessed = 0
     private var totalSizeBytes = 0L
     private val sortDirection = if (config.deleteOrder == DeleteOrder.OLDEST_FIRST) "ASC" else "DESC"
     private val dateFmt = SimpleDateFormat("MMM dd, yyyy", Locale.US).apply {
         timeZone = TimeZone.getDefault()
     }
+    private val timestampFmt = SimpleDateFormat("HH:mm:ss", Locale.US)
 
-    suspend fun execute(): Int {
-        totalFound = 0
+    private var cachedScanResults: ScanResults? = null
+    fun getScanResults(): ScanResults? = cachedScanResults
+
+    private fun log(msg: String) {
+        onLog("[${timestampFmt.format(Date())}] $msg")
+    }
+
+    private fun debugLog(msg: String) {
+        if (config.debugLogging) {
+            onLog("[${timestampFmt.format(Date())}] [DEBUG] $msg")
+        }
+    }
+
+    suspend fun execute(previousScan: ScanResults? = null): Int {
         totalProcessed = 0
         totalSizeBytes = 0L
 
         logDatabaseTotals()
 
         try {
-            if (config.includeSms) {
-                processSmsMessages()
-            }
+            if (config.dryRun) {
+                val smsResult = if (config.includeSms) scanSms() else SmsScanResult()
+                val mmsResult = if (config.includeMmsMedia || config.includeMmsGroup) scanMms() else MmsScanResult()
+                if (config.includeRcs) processRcsMessages()
 
-            if (config.includeMmsMedia || config.includeMmsGroup) {
-                processMmsMessages()
-            }
-
-            if (config.includeRcs) {
-                processRcsMessages()
+                cachedScanResults = ScanResults(
+                    smsThreadMap = smsResult.threadMap.mapValues { it.value.toList() },
+                    smsAddressMap = smsResult.addressMap.toMap(),
+                    mediaMmsIds = mmsResult.mediaIds.toList(),
+                    mediaConversations = mmsResult.mediaConversations.mapValues { it.value.toList() },
+                    groupMmsIds = mmsResult.groupIds.toList(),
+                    groupConversations = mmsResult.groupConversations.mapValues { it.value.toList() },
+                    mmsAddressMap = mmsResult.addressMap.toMap()
+                )
+            } else if (previousScan != null) {
+                log("Using cached scan results (skipping re-scan)")
+                if (config.includeSms && previousScan.smsThreadMap.isNotEmpty()) {
+                    deleteSmsFromScan(previousScan)
+                }
+                if (config.includeMmsMedia && previousScan.mediaMmsIds.isNotEmpty()) {
+                    deleteMmsFromScan("MMS (media)", previousScan.mediaMmsIds,
+                        previousScan.mediaConversations, previousScan.mmsAddressMap, config.batchSizeMmsMedia)
+                }
+                if (config.includeMmsGroup && previousScan.groupMmsIds.isNotEmpty()) {
+                    deleteMmsFromScan("MMS (group)", previousScan.groupMmsIds,
+                        previousScan.groupConversations, previousScan.mmsAddressMap, config.batchSizeMmsGroup)
+                }
+            } else {
+                log("No cached scan — running full scan + delete")
+                val smsResult = if (config.includeSms) scanSms() else SmsScanResult()
+                if (config.includeSms && smsResult.threadMap.isNotEmpty()) {
+                    val scan = ScanResults(
+                        smsThreadMap = smsResult.threadMap.mapValues { it.value.toList() },
+                        smsAddressMap = smsResult.addressMap.toMap(),
+                        mediaMmsIds = emptyList(), mediaConversations = emptyMap(),
+                        groupMmsIds = emptyList(), groupConversations = emptyMap(),
+                        mmsAddressMap = emptyMap()
+                    )
+                    deleteSmsFromScan(scan)
+                }
+                val mmsResult = if (config.includeMmsMedia || config.includeMmsGroup) scanMms() else MmsScanResult()
+                if (config.includeMmsMedia && mmsResult.mediaIds.isNotEmpty()) {
+                    deleteMmsFromScan("MMS (media)", mmsResult.mediaIds,
+                        mmsResult.mediaConversations.mapValues { it.value.toList() },
+                        mmsResult.addressMap, config.batchSizeMmsMedia)
+                }
+                if (config.includeMmsGroup && mmsResult.groupIds.isNotEmpty()) {
+                    deleteMmsFromScan("MMS (group)", mmsResult.groupIds,
+                        mmsResult.groupConversations.mapValues { it.value.toList() },
+                        mmsResult.addressMap, config.batchSizeMmsGroup)
+                }
+                if (config.includeRcs) processRcsMessages()
             }
 
             val action = if (config.dryRun) "found" else "deleted"
-            onLog("--- Complete: $totalProcessed messages $action (~${formatSize(totalSizeBytes)}) ---")
+            log("--- Complete: $totalProcessed messages $action (~${formatSize(totalSizeBytes)}) ---")
         } catch (_: kotlinx.coroutines.CancellationException) {
             val action = if (config.dryRun) "found so far" else "deleted so far"
-            onLog("--- Cancelled: $totalProcessed messages $action (~${formatSize(totalSizeBytes)}) ---")
+            log("--- Cancelled: $totalProcessed messages $action (~${formatSize(totalSizeBytes)}) ---")
             throw kotlinx.coroutines.CancellationException("cancelled")
         }
         return totalProcessed
     }
 
+    // ──────────────────── SMS ────────────────────
+
+    private data class SmsScanResult(
+        val threadMap: MutableMap<String, MutableList<Long>> = mutableMapOf(),
+        val addressMap: MutableMap<String, String> = mutableMapOf(),
+        val sizeBytes: Long = 0L
+    )
+
+    private suspend fun scanSms(): SmsScanResult {
+        log("=== Scanning SMS messages ===")
+        val uri = Telephony.Sms.CONTENT_URI
+        val selection = buildDateSelection("date")
+        val selectionArgs = buildDateSelectionArgs(useSeconds = false)
+
+        val result = SmsScanResult()
+        var smsBytes = 0L
+        var scanned = 0
+        var offset = 0
+        var hasMore = true
+
+        while (hasMore) {
+            coroutineContext.ensureActive()
+            val queryStart = System.currentTimeMillis()
+            var batchCount = 0
+            contentResolver.query(
+                uri,
+                arrayOf(Telephony.Sms._ID, Telephony.Sms.THREAD_ID, Telephony.Sms.ADDRESS, Telephony.Sms.BODY),
+                selection, selectionArgs,
+                "date $sortDirection LIMIT ${config.batchSize} OFFSET $offset"
+            )?.use { cursor ->
+                if (cursor.count == 0) { hasMore = false; return@use }
+                batchCount = cursor.count
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(0)
+                    val threadId = cursor.getString(1) ?: "unknown"
+                    val address = cursor.getString(2) ?: "unknown"
+                    val body = cursor.getString(3)
+                    smsBytes += ROW_OVERHEAD + (body?.toByteArray()?.size ?: 0)
+                    result.threadMap.getOrPut(threadId) { mutableListOf() }.add(id)
+                    result.addressMap[threadId] = address
+                }
+                if (cursor.count < config.batchSize) hasMore = false
+            } ?: run { hasMore = false }
+
+            offset += batchCount
+            scanned += batchCount
+            totalProcessed += batchCount
+            debugLog("SMS scan: $batchCount rows in ${System.currentTimeMillis() - queryStart}ms [total: $scanned]")
+            if (batchCount > 0) log("SMS scan: $scanned messages found so far")
+            if (hasMore && batchCount > 0) delay(config.delayMs)
+        }
+
+        totalSizeBytes += smsBytes
+        log("SMS total: $scanned messages, ~${formatSize(smsBytes)} estimated")
+        logConversationSummary("SMS", result.threadMap, result.addressMap)
+        return result
+    }
+
+    private suspend fun deleteSmsFromScan(scan: ScanResults) {
+        val uri = Telephony.Sms.CONTENT_URI
+        val totalToDelete = scan.smsThreadMap.values.sumOf { it.size }
+        log("=== Deleting SMS messages ===")
+        log("SMS: $totalToDelete messages across ${scan.smsThreadMap.size} threads")
+
+        // Classify threads: whole vs partial
+        val wholeThreadIds = mutableListOf<String>()
+        val partialThreads = mutableMapOf<String, List<Long>>()
+        val countStart = System.currentTimeMillis()
+        for ((threadId, ids) in scan.smsThreadMap) {
+            coroutineContext.ensureActive()
+            val threadTotal = countWithSelection(uri, "thread_id = ?", arrayOf(threadId))
+            if (threadTotal > 0 && threadTotal.toInt() == ids.size) {
+                wholeThreadIds.add(threadId)
+            } else {
+                partialThreads[threadId] = ids
+            }
+        }
+        val wholeCount = wholeThreadIds.sumOf { scan.smsThreadMap[it]!!.size }
+        val partialCount = partialThreads.values.sumOf { it.size }
+        debugLog("Thread classification: ${wholeThreadIds.size} whole ($wholeCount msgs), ${partialThreads.size} partial ($partialCount msgs) in ${System.currentTimeMillis() - countStart}ms")
+
+        var deletedSoFar = 0
+
+        // Whole-thread deletes — fast path
+        if (wholeThreadIds.isNotEmpty()) {
+            log("SMS: deleting $wholeCount messages via ${wholeThreadIds.size} whole-thread deletes...")
+            for (threadId in wholeThreadIds) {
+                coroutineContext.ensureActive()
+                val threadStart = System.currentTimeMillis()
+                try {
+                    val deleted = contentResolver.delete(
+                        Uri.parse("content://sms/conversations/$threadId"), null, null
+                    )
+                    deletedSoFar += deleted
+                    totalProcessed += deleted
+                    debugLog("Thread $threadId: deleted $deleted in ${System.currentTimeMillis() - threadStart}ms")
+                } catch (e: Exception) {
+                    debugLog("Thread $threadId delete failed: ${e.message}")
+                }
+                log("  SMS: $deletedSoFar / $totalToDelete deleted")
+            }
+        }
+
+        // Partial-thread deletes — per-message
+        if (partialThreads.isNotEmpty()) {
+            log("SMS: deleting $partialCount messages from ${partialThreads.size} partial threads...")
+            val allPartialIds = partialThreads.values.flatten()
+            for (batch in allPartialIds.chunked(config.batchSize)) {
+                coroutineContext.ensureActive()
+                val batchStart = System.currentTimeMillis()
+                val deleted = deleteWithProgress("SMS", uri, batch, deletedSoFar)
+                deletedSoFar += deleted
+                totalProcessed += deleted
+                val batchElapsed = (System.currentTimeMillis() - batchStart) / 1000.0
+                log("SMS: $deletedSoFar / $totalToDelete deleted [batch: %.1fs]".format(batchElapsed))
+                delay(config.delayMs)
+            }
+        }
+
+        log("SMS delete complete: $deletedSoFar deleted")
+    }
+
+    // ──────────────────── MMS ────────────────────
+
+    private data class MmsScanResult(
+        val mediaIds: MutableList<Long> = mutableListOf(),
+        val mediaDates: MutableList<Long> = mutableListOf(),
+        val mediaConversations: MutableMap<String, MutableList<Long>> = mutableMapOf(),
+        val groupIds: MutableList<Long> = mutableListOf(),
+        val groupDates: MutableList<Long> = mutableListOf(),
+        val groupConversations: MutableMap<String, MutableList<Long>> = mutableMapOf(),
+        val addressMap: MutableMap<String, String> = mutableMapOf(),
+        var mediaBytes: Long = 0L,
+        var groupBytes: Long = 0L
+    )
+
+    private suspend fun scanMms(): MmsScanResult {
+        log("=== Scanning MMS messages ===")
+        val uri = Telephony.Mms.CONTENT_URI
+        val selection = buildDateSelection("date")
+        val selectionArgs = buildDateSelectionArgs(useSeconds = true)
+        val result = MmsScanResult()
+
+        // Pre-fetch media MMS IDs and group thread IDs in bulk
+        val mediaMmsIds: Set<Long> = if (config.includeMmsMedia) preloadMediaMmsIds(selection, selectionArgs) else emptySet()
+        val groupThreadIds: Set<Long> = if (config.includeMmsGroup) preloadGroupThreadIds() else emptySet()
+
+        val scanBatchSize = maxOf(config.batchSizeMmsMedia, config.batchSizeMmsGroup, config.batchSize)
+        var offset = 0
+        var hasMore = true
+        var scanned = 0
+
+        while (hasMore) {
+            coroutineContext.ensureActive()
+            val scanStart = System.currentTimeMillis()
+
+            data class MmsRow(val id: Long, val threadId: Long, val dateSec: Long)
+            val batchRows = mutableListOf<MmsRow>()
+            contentResolver.query(
+                uri,
+                arrayOf(Telephony.Mms._ID, Telephony.Mms.THREAD_ID, "date"),
+                selection, selectionArgs,
+                "date $sortDirection LIMIT $scanBatchSize OFFSET $offset"
+            )?.use { cursor ->
+                if (cursor.count == 0) { hasMore = false; return@use }
+                while (cursor.moveToNext()) {
+                    batchRows.add(MmsRow(cursor.getLong(0), cursor.getLong(1), cursor.getLong(2)))
+                }
+                if (cursor.count < scanBatchSize) hasMore = false
+            } ?: run { hasMore = false }
+            debugLog("MMS scan query: ${batchRows.size} rows in ${System.currentTimeMillis() - scanStart}ms")
+
+            var matchCount = 0
+            val classifyStart = System.currentTimeMillis()
+            for (row in batchRows) {
+                coroutineContext.ensureActive()
+                val hasMedia = row.id in mediaMmsIds
+                val isGroup = row.threadId in groupThreadIds
+                val isMediaMatch = hasMedia && config.includeMmsMedia
+                val isGroupMatch = isGroup && !hasMedia && config.includeMmsGroup
+
+                if (isMediaMatch || isGroupMatch) {
+                    matchCount++
+                    val address = getMmsAddress(row.id)
+                    result.addressMap[row.threadId.toString()] = address
+
+                    if (isMediaMatch) {
+                        val partSize = getMmsPartSize(row.id)
+                        result.mediaBytes += partSize
+                        result.mediaIds.add(row.id)
+                        result.mediaDates.add(row.dateSec * 1000)
+                        result.mediaConversations.getOrPut(row.threadId.toString()) { mutableListOf() }.add(row.id)
+                    } else {
+                        val partSize = getMmsPartSize(row.id)
+                        result.groupBytes += partSize
+                        result.groupIds.add(row.id)
+                        result.groupDates.add(row.dateSec * 1000)
+                        result.groupConversations.getOrPut(row.threadId.toString()) { mutableListOf() }.add(row.id)
+                    }
+                }
+            }
+            debugLog("MMS classify: $matchCount matched of ${batchRows.size} in ${System.currentTimeMillis() - classifyStart}ms")
+
+            offset += batchRows.size
+            scanned += batchRows.size
+            totalProcessed += matchCount
+            if (batchRows.isNotEmpty()) {
+                log("MMS scan: $scanned scanned, ${result.mediaIds.size} media + ${result.groupIds.size} group matched")
+            }
+
+            if (hasMore && batchRows.isNotEmpty()) delay(config.delayMs)
+        }
+
+        if (config.includeMmsMedia) {
+            totalSizeBytes += result.mediaBytes
+            log("MMS (media) total: ${result.mediaIds.size} messages, ~${formatSize(result.mediaBytes)}")
+            logConversationSummary("MMS (media)", result.mediaConversations, result.addressMap)
+        }
+        if (config.includeMmsGroup) {
+            totalSizeBytes += result.groupBytes
+            log("MMS (group) total: ${result.groupIds.size} messages, ~${formatSize(result.groupBytes)}")
+            logConversationSummary("MMS (group)", result.groupConversations, result.addressMap)
+        }
+        return result
+    }
+
+    private suspend fun deleteMmsFromScan(
+        label: String,
+        ids: List<Long>,
+        conversations: Map<String, List<Long>>,
+        addressMap: Map<String, String>,
+        batchSize: Int
+    ) {
+        log("=== Deleting $label messages ===")
+        log("$label: ${ids.size} messages across ${conversations.size} threads")
+
+        var deletedSoFar = 0
+        for (batch in ids.chunked(batchSize)) {
+            coroutineContext.ensureActive()
+            val batchStart = System.currentTimeMillis()
+            log("$label: deleting ${batch.size} messages...")
+            val deleted = deleteWithProgress(label, Telephony.Mms.CONTENT_URI, batch, deletedSoFar)
+            deletedSoFar += deleted
+            totalProcessed += deleted
+            val batchElapsed = (System.currentTimeMillis() - batchStart) / 1000.0
+            log("$label: $deletedSoFar / ${ids.size} deleted [batch: %.1fs]".format(batchElapsed))
+            delay(config.delayMs)
+        }
+
+        log("$label delete complete: $deletedSoFar deleted")
+    }
+
+    // ──────────────────── MMS Preload ────────────────────
+
+    private fun preloadMediaMmsIds(mmsDateSelection: String?, mmsDateArgs: Array<String>?): Set<Long> {
+        val ids = mutableSetOf<Long>()
+        val startTime = System.currentTimeMillis()
+        try {
+            val mmsIdsInRange = mutableSetOf<Long>()
+            contentResolver.query(
+                Telephony.Mms.CONTENT_URI,
+                arrayOf(Telephony.Mms._ID),
+                mmsDateSelection, mmsDateArgs, null
+            )?.use { cursor ->
+                while (cursor.moveToNext()) { mmsIdsInRange.add(cursor.getLong(0)) }
+            }
+            debugLog("Found ${mmsIdsInRange.size} MMS in date range in ${System.currentTimeMillis() - startTime}ms")
+
+            if (mmsIdsInRange.isEmpty()) return ids
+
+            val partStart = System.currentTimeMillis()
+            for (chunk in mmsIdsInRange.chunked(500)) {
+                val idList = chunk.joinToString(",")
+                contentResolver.query(
+                    Uri.parse("content://mms/part"),
+                    arrayOf("mid"),
+                    "mid IN ($idList) AND (ct LIKE 'image/%' OR ct LIKE 'video/%' OR ct LIKE 'audio/%')",
+                    null, null
+                )?.use { cursor ->
+                    while (cursor.moveToNext()) { ids.add(cursor.getLong(0)) }
+                }
+            }
+            debugLog("Parts query found ${ids.size} media MMS in ${System.currentTimeMillis() - partStart}ms")
+        } catch (e: Exception) {
+            debugLog("preloadMediaMmsIds failed: ${e.message}")
+        }
+        return ids
+    }
+
+    private fun preloadGroupThreadIds(): Set<Long> {
+        val groupIds = mutableSetOf<Long>()
+        val startTime = System.currentTimeMillis()
+        try {
+            contentResolver.query(
+                Uri.parse("content://mms-sms/conversations?simple=true"),
+                arrayOf("_id", "recipient_ids"),
+                null, null, null
+            )?.use { cursor ->
+                while (cursor.moveToNext()) {
+                    val threadId = cursor.getLong(0)
+                    val recipientIds = cursor.getString(1) ?: ""
+                    if (recipientIds.trim().contains(" ")) {
+                        groupIds.add(threadId)
+                    }
+                }
+            }
+            debugLog("Found ${groupIds.size} group threads in ${System.currentTimeMillis() - startTime}ms")
+        } catch (e: Exception) {
+            debugLog("preloadGroupThreadIds failed: ${e.message}")
+        }
+        return groupIds
+    }
+
+    // ──────────────────── MMS Helpers ────────────────────
+
+    private fun getMmsAddress(mmsId: Long): String {
+        val addrUri = Uri.parse("content://mms/$mmsId/addr")
+        return try {
+            contentResolver.query(addrUri, arrayOf("address"), null, null, null)?.use { cursor ->
+                while (cursor.moveToNext()) {
+                    val addr = cursor.getString(0) ?: continue
+                    if (addr.isNotBlank() && addr != "insert-address-token") return@use addr
+                }
+                "unknown"
+            } ?: "unknown"
+        } catch (_: Exception) { "unknown" }
+    }
+
+    private fun getMmsPartSize(mmsId: Long): Long {
+        val partUri = Uri.parse("content://mms/$mmsId/part")
+        var size = 0L
+        try {
+            contentResolver.query(partUri, arrayOf("_id", "_data", "ct", "text"), null, null, null)?.use { cursor ->
+                while (cursor.moveToNext()) {
+                    val ct = cursor.getString(cursor.getColumnIndexOrThrow("ct")) ?: ""
+                    val isMedia = ct.startsWith("image/") || ct.startsWith("video/") || ct.startsWith("audio/")
+                    if (isMedia) {
+                        val data = cursor.getString(cursor.getColumnIndexOrThrow("_data"))
+                        if (data != null) {
+                            try {
+                                val partId = cursor.getLong(cursor.getColumnIndexOrThrow("_id"))
+                                contentResolver.openAssetFileDescriptor(
+                                    Uri.parse("content://mms/part/$partId"), "r"
+                                )?.use { afd -> size += afd.length.let { if (it >= 0) it else 0L } }
+                            } catch (_: Exception) { }
+                        }
+                    } else {
+                        val text = cursor.getString(cursor.getColumnIndexOrThrow("text"))
+                        size += text?.toByteArray()?.size?.toLong() ?: 0L
+                    }
+                }
+            }
+        } catch (_: Exception) { }
+        return size + ROW_OVERHEAD
+    }
+
+    // ──────────────────── Delete Engine ────────────────────
+
+    private suspend fun deleteWithProgress(
+        label: String,
+        uri: Uri,
+        ids: List<Long>,
+        alreadyDeletedBefore: Int
+    ): Int {
+        val authority = uri.authority ?: return 0
+        val chunks = ids.chunked(config.deleteChunkSize)
+        var totalDeleted = 0
+        for ((index, chunk) in chunks.withIndex()) {
+            coroutineContext.ensureActive()
+            val chunkStart = System.currentTimeMillis()
+            val ops = ArrayList<ContentProviderOperation>(chunk.size)
+            for (id in chunk) {
+                ops.add(
+                    ContentProviderOperation.newDelete(Uri.withAppendedPath(uri, id.toString())).build()
+                )
+            }
+            try {
+                val results = contentResolver.applyBatch(authority, ops)
+                totalDeleted += results.size
+            } catch (_: Exception) {
+                for (id in chunk) {
+                    try {
+                        totalDeleted += contentResolver.delete(
+                            Uri.withAppendedPath(uri, id.toString()), null, null
+                        )
+                    } catch (_: Exception) { }
+                }
+            }
+            val chunkElapsed = System.currentTimeMillis() - chunkStart
+            val running = alreadyDeletedBefore + totalDeleted
+            if (config.debugLogging) {
+                debugLog("$label chunk ${index + 1}/${chunks.size}: ${chunk.size} in ${chunkElapsed}ms [running: $running]")
+            } else {
+                log("  $label: $running deleted so far")
+            }
+        }
+        return totalDeleted
+    }
+
+    // ──────────────────── RCS ────────────────────
+
+    private suspend fun processRcsMessages() {
+        log("=== Scanning RCS messages ===")
+        try {
+            val uri = Uri.parse("content://im/chat")
+            contentResolver.query(uri, null, null, null, null)?.use {
+                log("RCS provider found, but direct RCS deletion is carrier-dependent.")
+            }
+        } catch (_: Exception) {
+            log("RCS provider not available on this device.")
+        }
+    }
+
+    // ──────────────────── Utility ────────────────────
+
     private fun logDatabaseTotals() {
         val smsCount = countRows(Telephony.Sms.CONTENT_URI)
         val mmsCount = countRows(Telephony.Mms.CONTENT_URI)
-        onLog("Database totals: $smsCount SMS, $mmsCount MMS (${smsCount + mmsCount} total)")
+        log("Database totals: $smsCount SMS, $mmsCount MMS (${smsCount + mmsCount} total)")
     }
 
     private fun countWithSelection(uri: Uri, selection: String?, selectionArgs: Array<String>?): Long {
@@ -98,363 +569,12 @@ class MessageCleaner(
         } catch (_: Exception) { 0L }
     }
 
-    private fun countRows(uri: Uri): Long {
-        return try {
-            contentResolver.query(uri, arrayOf("COUNT(*)"), null, null, null)?.use { cursor ->
-                if (cursor.moveToFirst()) cursor.getLong(0) else 0L
-            } ?: 0L
-        } catch (_: Exception) { 0L }
-    }
-
-    private suspend fun processSmsMessages() {
-        onLog("=== Scanning SMS messages ===")
-        val uri = Telephony.Sms.CONTENT_URI
-        val selection = buildDateSelection("date")
-        val selectionArgs = buildDateSelectionArgs(useSeconds = false)
-
-        if (!config.dryRun) {
-            val total = countWithSelection(uri, selection, selectionArgs)
-            onLog("SMS: $total messages to delete")
-        }
-
-        val conversationMap = mutableMapOf<String, MutableList<Long>>()
-        val addressMap = mutableMapOf<String, String>()
-        var smsBytes = 0L
-        var smsDeletedSoFar = 0
-
-        var offset = 0
-        var hasMore = true
-
-        while (hasMore) {
-            coroutineContext.ensureActive()
-
-            val ids = mutableListOf<Long>()
-            var batchMinDate = Long.MAX_VALUE
-            var batchMaxDate = Long.MIN_VALUE
-            var batchBytes = 0L
-            val projection = if (config.dryRun)
-                arrayOf(Telephony.Sms._ID, Telephony.Sms.THREAD_ID, Telephony.Sms.ADDRESS, "date", Telephony.Sms.BODY)
-            else
-                arrayOf(Telephony.Sms._ID, Telephony.Sms.THREAD_ID, Telephony.Sms.ADDRESS, "date")
-            contentResolver.query(
-                uri,
-                projection,
-                selection,
-                selectionArgs,
-                "date $sortDirection LIMIT ${config.batchSize} OFFSET $offset"
-            )?.use { cursor ->
-                if (cursor.count == 0) {
-                    hasMore = false
-                    return@use
-                }
-                while (cursor.moveToNext()) {
-                    val id = cursor.getLong(0)
-                    val threadId = cursor.getString(1) ?: "unknown"
-                    val address = cursor.getString(2) ?: "unknown"
-                    val date = cursor.getLong(3)
-                    ids.add(id)
-                    if (date < batchMinDate) batchMinDate = date
-                    if (date > batchMaxDate) batchMaxDate = date
-                    if (config.dryRun) {
-                        val body = cursor.getString(4)
-                        batchBytes += ROW_OVERHEAD + (body?.toByteArray()?.size ?: 0)
-                    }
-                    conversationMap.getOrPut(threadId) { mutableListOf() }.add(id)
-                    addressMap[threadId] = address
-                }
-                if (cursor.count < config.batchSize) hasMore = false
-            } ?: run { hasMore = false }
-
-            totalFound += ids.size
-            smsBytes += batchBytes
-            offset += ids.size
-
-            val dateRange = formatDateRange(batchMinDate, batchMaxDate)
-            if (ids.isNotEmpty() && !config.dryRun) {
-                onLog("SMS: deleting ${ids.size} messages ($dateRange)...")
-                val deleted = deleteWithProgress(uri, ids) { chunkDone, chunkTotal ->
-                    val running = smsDeletedSoFar + (chunkDone * config.deleteChunkSize).coerceAtMost(ids.size)
-                    onLog("  SMS: $running deleted so far")
-                }
-                smsDeletedSoFar += deleted
-                totalProcessed += deleted
-                onLog("SMS: $smsDeletedSoFar deleted ($dateRange)")
-                offset = 0
-            } else if (ids.isNotEmpty()) {
-                totalProcessed += ids.size
-                onLog("SMS batch: found ${ids.size} messages ($dateRange) [total: $totalProcessed]")
-            }
-
-            if (hasMore && ids.isNotEmpty()) {
-                delay(config.delayMs)
-            }
-        }
-
-        totalSizeBytes += smsBytes
-        val action = if (config.dryRun) "found" else "deleted"
-        onLog("SMS total: ${conversationMap.values.sumOf { it.size }} messages, ~${formatSize(smsBytes)} estimated")
-        logConversationSummary("SMS", conversationMap, addressMap)
-    }
-
-    private suspend fun processMmsMessages() {
-        onLog("=== Scanning MMS messages ===")
-        val uri = Telephony.Mms.CONTENT_URI
-        val selection = buildDateSelection("date")
-        val selectionArgs = buildDateSelectionArgs(useSeconds = true)
-        val scanBatchSize = maxOf(config.batchSizeMmsMedia, config.batchSizeMmsGroup)
-
-        val mediaConversations = mutableMapOf<String, MutableList<Long>>()
-        val groupConversations = mutableMapOf<String, MutableList<Long>>()
-        val addressMap = mutableMapOf<String, String>()
-
-        val mediaIds = mutableListOf<Long>()
-        val mediaDates = mutableListOf<Long>()
-        val mediaDeletedSoFar = intArrayOf(0)
-        val groupIds = mutableListOf<Long>()
-        val groupDates = mutableListOf<Long>()
-        val groupDeletedSoFar = intArrayOf(0)
-        var mediaBytes = 0L
-        var groupBytes = 0L
-        var needOffsetReset = false
-
-        var offset = 0
-        var hasMore = true
-
-        while (hasMore) {
-            coroutineContext.ensureActive()
-
-            data class MmsRow(val id: Long, val threadId: String, val dateSec: Long)
-            val batchRows = mutableListOf<MmsRow>()
-            contentResolver.query(
-                uri,
-                arrayOf(Telephony.Mms._ID, Telephony.Mms.THREAD_ID, "date"),
-                selection,
-                selectionArgs,
-                "date $sortDirection LIMIT $scanBatchSize OFFSET $offset"
-            )?.use { cursor ->
-                if (cursor.count == 0) {
-                    hasMore = false
-                    return@use
-                }
-                while (cursor.moveToNext()) {
-                    batchRows.add(MmsRow(cursor.getLong(0), cursor.getString(1) ?: "unknown", cursor.getLong(2)))
-                }
-                if (cursor.count < scanBatchSize) hasMore = false
-            } ?: run { hasMore = false }
-
-            for (row in batchRows) {
-                coroutineContext.ensureActive()
-
-                // Single parts query: get media status + size in one call
-                val (hasMedia, partSize) = classifyMmsParts(row.id, config.dryRun)
-                // Single addr query: get group status + address in one call
-                val (isGroup, address) = classifyMmsAddr(row.id)
-                addressMap[row.threadId] = address
-
-                val isMediaMatch = hasMedia && config.includeMmsMedia
-                val isGroupMatch = isGroup && !hasMedia && config.includeMmsGroup
-
-                if (isMediaMatch) {
-                    mediaBytes += partSize
-                    mediaIds.add(row.id)
-                    mediaDates.add(row.dateSec * 1000)
-                    mediaConversations.getOrPut(row.threadId) { mutableListOf() }.add(row.id)
-                } else if (isGroupMatch) {
-                    groupBytes += partSize
-                    groupIds.add(row.id)
-                    groupDates.add(row.dateSec * 1000)
-                    groupConversations.getOrPut(row.threadId) { mutableListOf() }.add(row.id)
-                }
-            }
-
-            offset += batchRows.size
-
-            if (mediaIds.size >= config.batchSizeMmsMedia) {
-                flushMmsBatch("MMS (media)", uri, mediaIds, mediaDates, config.batchSizeMmsMedia, mediaDeletedSoFar)
-                needOffsetReset = true
-            }
-            if (groupIds.size >= config.batchSizeMmsGroup) {
-                flushMmsBatch("MMS (group)", uri, groupIds, groupDates, config.batchSizeMmsGroup, groupDeletedSoFar)
-                needOffsetReset = true
-            }
-
-            if (needOffsetReset && !config.dryRun) {
-                offset = 0
-                needOffsetReset = false
-            }
-
-            if (hasMore && batchRows.isNotEmpty()) {
-                delay(config.delayMs)
-            }
-        }
-
-        // Flush remaining
-        if (mediaIds.isNotEmpty()) {
-            flushMmsBatch("MMS (media)", uri, mediaIds, mediaDates, mediaIds.size, mediaDeletedSoFar)
-        }
-        if (groupIds.isNotEmpty()) {
-            flushMmsBatch("MMS (group)", uri, groupIds, groupDates, groupIds.size, groupDeletedSoFar)
-        }
-
-        if (config.includeMmsMedia) {
-            totalSizeBytes += mediaBytes
-            onLog("MMS (media) total: ${mediaConversations.values.sumOf { it.size }} messages, ~${formatSize(mediaBytes)}")
-            logConversationSummary("MMS (media)", mediaConversations, addressMap)
-        }
-        if (config.includeMmsGroup) {
-            totalSizeBytes += groupBytes
-            onLog("MMS (group) total: ${groupConversations.values.sumOf { it.size }} messages, ~${formatSize(groupBytes)}")
-            logConversationSummary("MMS (group)", groupConversations, addressMap)
-        }
-    }
-
-    private suspend fun flushMmsBatch(
-        label: String,
-        uri: Uri,
-        ids: MutableList<Long>,
-        dates: MutableList<Long>,
-        batchSize: Int,
-        deletedSoFar: IntArray
-    ) {
-        while (ids.size >= batchSize) {
-            val batch = ids.subList(0, batchSize).toList()
-            val batchDates = dates.subList(0, batchSize).toList()
-            ids.subList(0, batchSize).clear()
-            dates.subList(0, batchSize).clear()
-
-            totalFound += batch.size
-            val dateRange = formatDateRange(batchDates.min(), batchDates.max())
-
-            if (!config.dryRun) {
-                onLog("$label: deleting ${batch.size} messages ($dateRange)...")
-                val deleted = deleteWithProgress(uri, batch) { chunkDone, chunkTotal ->
-                    val running = deletedSoFar[0] + (chunkDone * config.deleteChunkSize).coerceAtMost(batch.size)
-                    onLog("  $label: $running deleted so far")
-                }
-                deletedSoFar[0] += deleted
-                totalProcessed += deleted
-                onLog("$label: ${deletedSoFar[0]} deleted ($dateRange)")
-            } else {
-                totalProcessed += batch.size
-                onLog("$label batch: found ${batch.size} messages ($dateRange) [total: $totalProcessed]")
-            }
-            delay(config.delayMs)
-        }
-    }
-
-    private suspend fun processRcsMessages() {
-        onLog("=== Scanning RCS messages ===")
-        try {
-            val uri = Uri.parse("content://im/chat")
-            contentResolver.query(uri, null, null, null, null)?.use {
-                onLog("RCS provider found, but direct RCS deletion is carrier-dependent.")
-                onLog("RCS messages may appear in SMS table on some devices.")
-            }
-        } catch (_: Exception) {
-            onLog("RCS provider not available on this device.")
-            onLog("Some RCS messages may be stored in SMS/MMS tables and handled by those scans.")
-        }
-    }
-
-    // Returns (hasMedia, estimatedSizeBytes) in a single parts query
-    private fun classifyMmsParts(mmsId: Long, calcSize: Boolean): Pair<Boolean, Long> {
-        val partUri = Uri.parse("content://mms/$mmsId/part")
-        var hasMedia = false
-        var size = 0L
-        try {
-            val projection = if (calcSize) arrayOf("_id", "_data", "ct", "text") else arrayOf("ct")
-            contentResolver.query(partUri, projection, null, null, null)?.use { cursor ->
-                while (cursor.moveToNext()) {
-                    val ct = cursor.getString(cursor.getColumnIndexOrThrow("ct")) ?: ""
-                    val isMedia = ct.startsWith("image/") || ct.startsWith("video/") || ct.startsWith("audio/")
-                    if (isMedia) hasMedia = true
-                    if (calcSize) {
-                        if (isMedia) {
-                            val data = cursor.getString(cursor.getColumnIndexOrThrow("_data"))
-                            if (data != null) {
-                                try {
-                                    val partId = cursor.getLong(cursor.getColumnIndexOrThrow("_id"))
-                                    contentResolver.openAssetFileDescriptor(
-                                        Uri.parse("content://mms/part/$partId"), "r"
-                                    )?.use { afd -> size += afd.length.let { if (it >= 0) it else 0L } }
-                                } catch (_: Exception) { }
-                            }
-                        } else {
-                            val text = cursor.getString(cursor.getColumnIndexOrThrow("text"))
-                            size += text?.toByteArray()?.size?.toLong() ?: 0L
-                        }
-                    } else if (hasMedia) {
-                        break
-                    }
-                }
-            }
-        } catch (_: Exception) { }
-        return hasMedia to (size + ROW_OVERHEAD)
-    }
-
-    // Returns (isGroup, firstAddress) in a single addr query
-    private fun classifyMmsAddr(mmsId: Long): Pair<Boolean, String> {
-        val addrUri = Uri.parse("content://mms/$mmsId/addr")
-        var firstAddress = "unknown"
-        try {
-            contentResolver.query(addrUri, arrayOf("address", "type"), null, null, null)?.use { cursor ->
-                val recipients = mutableSetOf<String>()
-                while (cursor.moveToNext()) {
-                    val addr = cursor.getString(0) ?: continue
-                    val type = cursor.getInt(1)
-                    if (firstAddress == "unknown" && addr.isNotBlank() && addr != "insert-address-token") {
-                        firstAddress = addr
-                    }
-                    if (type == 137) continue
-                    if (addr.isNotBlank() && addr != "insert-address-token") {
-                        recipients.add(addr)
-                    }
-                }
-                return (recipients.size > 1) to firstAddress
-            }
-        } catch (_: Exception) { }
-        return false to firstAddress
-    }
-
-    private suspend fun deleteWithProgress(
-        uri: Uri,
-        ids: List<Long>,
-        onChunkProgress: (Int, Int) -> Unit
-    ): Int {
-        val authority = uri.authority ?: return 0
-        val chunks = ids.chunked(config.deleteChunkSize)
-        var totalDeleted = 0
-        for ((index, chunk) in chunks.withIndex()) {
-            coroutineContext.ensureActive()
-            val ops = ArrayList<ContentProviderOperation>(chunk.size)
-            for (id in chunk) {
-                ops.add(
-                    ContentProviderOperation.newDelete(Uri.withAppendedPath(uri, id.toString()))
-                        .build()
-                )
-            }
-            try {
-                val results = contentResolver.applyBatch(authority, ops)
-                totalDeleted += results.size
-            } catch (_: Exception) {
-                // Fallback to individual deletes if applyBatch not supported
-                for (id in chunk) {
-                    try {
-                        totalDeleted += contentResolver.delete(
-                            Uri.withAppendedPath(uri, id.toString()), null, null
-                        )
-                    } catch (_: Exception) { }
-                }
-            }
-            onChunkProgress(index + 1, chunks.size)
-        }
-        return totalDeleted
-    }
+    private fun countRows(uri: Uri): Long = countWithSelection(uri, null, null)
 
     private fun formatDateRange(minMs: Long, maxMs: Long): String {
         val from = dateFmt.format(Date(minMs))
         val to = dateFmt.format(Date(maxMs))
-        return if (from == to) from else "$from \u2013 $to"
+        return if (from == to) from else "$from – $to"
     }
 
     private fun buildDateSelection(dateColumn: String): String? {
@@ -472,33 +592,30 @@ class MessageCleaner(
     private fun buildDateSelectionArgs(useSeconds: Boolean): Array<String>? {
         val divisor = if (useSeconds) 1000L else 1L
         val args = mutableListOf<String>()
-
         config.startDateMs?.let { args.add((it / divisor).toString()) }
         config.endDateMs?.let { args.add((it / divisor).toString()) }
-
         return if (args.isEmpty()) null else args.toTypedArray()
     }
 
     private fun logConversationSummary(
         type: String,
-        conversationMap: Map<String, List<Long>>,
+        conversationMap: Map<String, out List<Long>>,
         addressMap: Map<String, String>
     ) {
         if (conversationMap.isEmpty()) {
-            onLog("$type: no messages found in date range")
+            log("$type: no messages found in date range")
             return
         }
-
-        onLog("--- $type Summary ---")
+        log("--- $type Summary ---")
         conversationMap.entries
             .sortedByDescending { it.value.size }
             .forEach { (threadId, ids) ->
                 val address = addressMap[threadId] ?: "unknown"
                 val displayName = contactResolver.resolve(address)
                 val label = if (displayName != address) "$displayName ($address)" else address
-                onLog("  Thread $threadId | $label | ${ids.size} messages")
+                log("  Thread $threadId | $label | ${ids.size} messages")
             }
-        onLog("$type total: ${conversationMap.values.sumOf { it.size }} messages")
+        log("$type total: ${conversationMap.values.sumOf { it.size }} messages")
     }
 
     private fun formatSize(bytes: Long): String {

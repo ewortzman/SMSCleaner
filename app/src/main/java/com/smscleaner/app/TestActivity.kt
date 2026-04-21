@@ -157,9 +157,11 @@ class TestActivity : AppCompatActivity() {
         }
     }
 
+    private val timestampFmt = java.text.SimpleDateFormat("HH:mm:ss", Locale.US)
+
     private fun appendLog(line: String) {
         synchronized(logBuilder) {
-            logBuilder.appendLine(line)
+            logBuilder.appendLine("[${timestampFmt.format(Date())}] $line")
             runOnUiThread {
                 tvTestLog.text = logBuilder.toString()
                 scrollTestLog.post { scrollTestLog.fullScroll(View.FOCUS_DOWN) }
