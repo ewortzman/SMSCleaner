@@ -1,6 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">SMS Cleaner</string>
+    <string name="drawer_subtitle">Message cleanup utility</string>
+    <string name="drawer_open">Open navigation</string>
+    <string name="drawer_close">Close navigation</string>
+    <string name="nav_manual_clean">Manual Clean</string>
+    <string name="nav_scheduled_clean">Scheduled Clean</string>
+    <string name="nav_test_messages">Test Messages</string>
     <string name="test_activity_title">Generate Test Messages</string>
     <string name="start_date">Start Date</string>
     <string name="end_date">End Date</string>
@@ -46,4 +52,15 @@
     <string name="debug_logging">Debug logging (timing &amp; extra detail)</string>
     <string name="date_range_required">At least one date (start or end) is required.</string>
     <string name="type_required">At least one message type must be selected.</string>
+
+    <!-- Scheduled Clean -->
+    <string name="schedule_enabled">Enable scheduled cleanup</string>
+    <string name="schedule_recurrence">Recurrence</string>
+    <string name="schedule_frequency">Frequency</string>
+    <string name="schedule_day_of_week">Day of Week</string>
+    <string name="schedule_day_of_month">Day of Month</string>
+    <string name="schedule_time">Notification Time</string>
+    <string name="schedule_threshold">Delete Threshold</string>
+    <string name="schedule_delete_older_than">Delete messages older than</string>
+    <string name="schedule_save">Save Schedule</string>
 </resources>
