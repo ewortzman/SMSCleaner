@@ -38,7 +38,13 @@ class ManualCleanFragment : Fragment(R.layout.fragment_manual_clean) {
 
     private val defaultSmsLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
-    ) { checkDefaultSmsStatus() }
+    ) {
+        val v = view ?: return@registerForActivityResult
+        val roleManager = requireContext().getSystemService(RoleManager::class.java)
+        val isDefault = roleManager.isRoleHeld(RoleManager.ROLE_SMS)
+        v.findViewById<MaterialCardView>(R.id.cardDefaultSms)?.visibility = if (isDefault) View.GONE else View.VISIBLE
+        v.findViewById<MaterialButton>(R.id.btnDryRun)?.isEnabled = isDefault
+    }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
