@@ -68,4 +68,10 @@
     <string name="confirm_delete_message">Delete %1$d messages? This cannot be undone.</string>
     <string name="confirm_delete_positive">Delete</string>
     <string name="confirm_delete_negative">Cancel</string>
+    <string name="storage_status">Storage Status</string>
+    <string name="loading">Loading…</string>
+    <string name="refresh">Refresh</string>
+    <string name="auto_tune">Auto-tune chunk size</string>
+    <string name="contact_warning_title">Contacts involved</string>
+    <string name="contact_warning_message">%1$d messages involve saved contacts. Review the log before proceeding.</string>
 </resources>

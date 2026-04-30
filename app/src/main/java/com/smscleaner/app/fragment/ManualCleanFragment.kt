@@ -10,6 +10,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.viewModels
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import com.google.android.material.checkbox.MaterialCheckBox
@@ -69,12 +71,16 @@ class ManualCleanFragment : Fragment(R.layout.fragment_manual_clean) {
         val etBatchDelay = view.findViewById<TextInputEditText>(R.id.etBatchDelay)
         val toggleDeleteOrder = view.findViewById<com.google.android.material.button.MaterialButtonToggleGroup>(R.id.toggleDeleteOrder)
         val cbDebugLogging = view.findViewById<MaterialCheckBox>(R.id.cbDebugLogging)
+        val cbAutoTune = view.findViewById<MaterialCheckBox>(R.id.cbAutoTune)
         val btnDryRun = view.findViewById<MaterialButton>(R.id.btnDryRun)
         val btnRun = view.findViewById<MaterialButton>(R.id.btnRun)
         val btnStop = view.findViewById<MaterialButton>(R.id.btnStop)
         val progressBar = view.findViewById<LinearProgressIndicator>(R.id.progressBar)
+        val tvProgressLabel = view.findViewById<MaterialTextView>(R.id.tvProgressLabel)
         val tvLog = view.findViewById<MaterialTextView>(R.id.tvLog)
         val scrollLog = view.findViewById<ScrollView>(R.id.scrollLog)
+        val tvStorageStatus = view.findViewById<MaterialTextView>(R.id.tvStorageStatus)
+        val btnRefreshStorage = view.findViewById<MaterialButton>(R.id.btnRefreshStorage)
 
         // Default SMS check
         fun checkDefault() {
@@ -171,7 +177,8 @@ class ManualCleanFragment : Fragment(R.layout.fragment_manual_clean) {
                 deleteChunkSize = deleteChunkSize.coerceAtLeast(1),
                 delayMs = delayMs.coerceAtLeast(0),
                 dryRun = true, deleteOrder = deleteOrder,
-                debugLogging = cbDebugLogging.isChecked
+                debugLogging = cbDebugLogging.isChecked,
+                autoTune = cbAutoTune.isChecked
             )
         }
 
@@ -179,9 +186,17 @@ class ManualCleanFragment : Fragment(R.layout.fragment_manual_clean) {
         btnRun.setOnClickListener {
             val config = buildConfig() ?: return@setOnClickListener
             val count = viewModel.lastDryRunCount.value ?: 0
+            val contactCount = viewModel.lastContactCount.value ?: 0
+            val msg = buildString {
+                append(getString(R.string.confirm_delete_message, count))
+                if (contactCount > 0) {
+                    append("\n\n")
+                    append(getString(R.string.contact_warning_message, contactCount))
+                }
+            }
             AlertDialog.Builder(requireContext())
                 .setTitle(R.string.confirm_delete_title)
-                .setMessage(getString(R.string.confirm_delete_message, count))
+                .setMessage(msg)
                 .setPositiveButton(R.string.confirm_delete_positive) { _, _ ->
                     viewModel.startClean(config)
                 }
@@ -203,12 +218,32 @@ class ManualCleanFragment : Fragment(R.layout.fragment_manual_clean) {
             }
             btnStop.isEnabled = running
             progressBar.visibility = if (running) View.VISIBLE else View.GONE
+            tvProgressLabel.visibility = if (running) View.VISIBLE else View.GONE
             btnRun.isEnabled = !running && viewModel.isDryRunComplete.value == true
+            if (!running) {
+                refreshStorageStatus(tvStorageStatus)
+            }
         }
 
         viewModel.isRunButtonEnabled.observe(viewLifecycleOwner) { enabled ->
             if (viewModel.isRunning.value != true) btnRun.isEnabled = enabled
         }
+
+        viewModel.progress.observe(viewLifecycleOwner) { p ->
+            if (p.total > 0) {
+                progressBar.isIndeterminate = false
+                progressBar.max = p.total
+                progressBar.setProgress(p.done, true)
+                val pct = (p.done * 100) / p.total.coerceAtLeast(1)
+                tvProgressLabel.text = "${p.done} / ${p.total} ($pct%)"
+            } else {
+                progressBar.isIndeterminate = true
+                tvProgressLabel.text = "Scanning…"
+            }
+        }
+
+        btnRefreshStorage.setOnClickListener { refreshStorageStatus(tvStorageStatus) }
+        refreshStorageStatus(tvStorageStatus)
 
         @Suppress("ClickableViewAccessibility")
         scrollLog.setOnTouchListener { v, _ ->
@@ -217,6 +252,42 @@ class ManualCleanFragment : Fragment(R.layout.fragment_manual_clean) {
         }
 
         checkDefault()
+    }
+
+    private fun refreshStorageStatus(tv: MaterialTextView) {
+        viewLifecycleOwner.lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val resolver = requireContext().contentResolver
+            val smsCount = countTable(resolver, android.provider.Telephony.Sms.CONTENT_URI)
+            val mmsCount = countTable(resolver, android.provider.Telephony.Mms.CONTENT_URI)
+            val storageMb = getAppStorageMb()
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                tv.text = "SMS: $smsCount\nMMS: $mmsCount\nTotal: ${smsCount + mmsCount}\nApp storage: %.1f MB".format(storageMb)
+            }
+        }
+    }
+
+    private fun countTable(resolver: android.content.ContentResolver, uri: android.net.Uri): Long {
+        return try {
+            resolver.query(uri, arrayOf("COUNT(*)"), null, null, null)?.use { c ->
+                if (c.moveToFirst()) c.getLong(0) else 0L
+            } ?: 0L
+        } catch (_: Exception) { 0L }
+    }
+
+    private fun getAppStorageMb(): Double {
+        return try {
+            val pkg = "com.android.providers.telephony"
+            val ai = requireContext().packageManager.getApplicationInfo(pkg, 0)
+            val path = ai.dataDir
+            val bytes = dirSize(java.io.File(path))
+            bytes / 1_000_000.0
+        } catch (_: Exception) { 0.0 }
+    }
+
+    private fun dirSize(f: java.io.File): Long {
+        if (!f.exists()) return 0
+        if (f.isFile) return f.length()
+        return f.listFiles()?.sumOf { dirSize(it) } ?: 0
     }
 
     override fun onResume() {

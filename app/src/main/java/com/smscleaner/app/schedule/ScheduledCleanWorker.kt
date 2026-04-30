@@ -61,10 +61,19 @@ class ScheduledCleanWorker(
 
         val resolver = applicationContext.contentResolver
         val contactResolver = ContactResolver(resolver)
-        val cleaner = MessageCleaner(resolver, contactResolver, cleanerConfig) { line ->
-            parseProgress(line)
-            updateNotification("$lastStage\n$deletedCount messages deleted")
-        }
+        val cleaner = MessageCleaner(
+            resolver, contactResolver, cleanerConfig,
+            onLog = { line ->
+                parseProgress(line)
+                updateNotification("$lastStage\n$deletedCount messages deleted")
+            },
+            onProgress = { done, total ->
+                if (total > 0) {
+                    val pct = (done * 100) / total.coerceAtLeast(1)
+                    updateProgressNotification(done, total, pct)
+                }
+            }
+        )
 
         return try {
             val count = cleaner.execute()
@@ -142,6 +151,19 @@ class ScheduledCleanWorker(
             .setSmallIcon(R.drawable.ic_notification)
             .setOngoing(true)
             .setProgress(0, 0, true)
+            .build()
+
+        notificationManager.notify(NOTIFICATION_ID_PROGRESS, notification)
+    }
+
+    private fun updateProgressNotification(done: Int, total: Int, pct: Int) {
+        val text = "$done / $total ($pct%)"
+        val notification = NotificationCompat.Builder(applicationContext, SMSCleanerApplication.CHANNEL_CLEAN_PROGRESS)
+            .setContentTitle("SMS Cleaner — Running")
+            .setContentText(text)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setOngoing(true)
+            .setProgress(total, done, false)
             .build()
 
         notificationManager.notify(NOTIFICATION_ID_PROGRESS, notification)

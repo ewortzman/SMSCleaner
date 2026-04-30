@@ -28,7 +28,8 @@ data class CleanerConfig(
     val delayMs: Long,
     val dryRun: Boolean,
     val deleteOrder: DeleteOrder = DeleteOrder.OLDEST_FIRST,
-    val debugLogging: Boolean = false
+    val debugLogging: Boolean = false,
+    val autoTune: Boolean = false
 )
 
 data class ScanResults(
@@ -45,11 +46,33 @@ class MessageCleaner(
     private val contentResolver: ContentResolver,
     private val contactResolver: ContactResolver,
     private val config: CleanerConfig,
-    private val onLog: (String) -> Unit
+    private val onLog: (String) -> Unit,
+    private val onProgress: ((done: Int, total: Int) -> Unit)? = null
 ) {
 
     private var totalProcessed = 0
     private var totalSizeBytes = 0L
+    private var progressDone = 0
+    private var progressTotal = 0
+    private var currentChunkSize = config.deleteChunkSize
+
+    private fun reportProgress() {
+        onProgress?.invoke(progressDone, progressTotal)
+    }
+
+    private fun adjustChunkSize(chunkElapsedMs: Long, chunkItems: Int) {
+        if (!config.autoTune) return
+        // Target: 1500-3000ms per chunk
+        val target = 2000L
+        val ratio = target.toDouble() / chunkElapsedMs.coerceAtLeast(1).toDouble()
+        // Scale chunk size gradually
+        val newSize = (currentChunkSize * ratio).toInt()
+            .coerceIn(AUTO_TUNE_MIN, AUTO_TUNE_MAX)
+        if (newSize != currentChunkSize) {
+            debugLog("Auto-tune: chunk $chunkItems in ${chunkElapsedMs}ms → new chunk size $newSize (was $currentChunkSize)")
+            currentChunkSize = newSize
+        }
+    }
     private val sortDirection = if (config.deleteOrder == DeleteOrder.OLDEST_FIRST) "ASC" else "DESC"
     private val dateFmt = SimpleDateFormat("MMM dd, yyyy", Locale.US).apply {
         timeZone = TimeZone.getDefault()
@@ -72,6 +95,8 @@ class MessageCleaner(
     suspend fun execute(previousScan: ScanResults? = null): Int {
         totalProcessed = 0
         totalSizeBytes = 0L
+        progressDone = 0
+        progressTotal = 0
 
         logDatabaseTotals()
 
@@ -201,6 +226,7 @@ class MessageCleaner(
     private suspend fun deleteSmsFromScan(scan: ScanResults) {
         val uri = Telephony.Sms.CONTENT_URI
         val totalToDelete = scan.smsThreadMap.values.sumOf { it.size }
+        progressTotal += totalToDelete
         log("=== Deleting SMS messages ===")
         log("SMS: $totalToDelete messages across ${scan.smsThreadMap.size} threads")
 
@@ -235,6 +261,8 @@ class MessageCleaner(
                     )
                     deletedSoFar += deleted
                     totalProcessed += deleted
+                    progressDone += deleted
+                    reportProgress()
                     debugLog("Thread $threadId: deleted $deleted in ${System.currentTimeMillis() - threadStart}ms")
                 } catch (e: Exception) {
                     debugLog("Thread $threadId delete failed: ${e.message}")
@@ -253,6 +281,8 @@ class MessageCleaner(
                 val deleted = deleteWithProgress("SMS", uri, batch, deletedSoFar)
                 deletedSoFar += deleted
                 totalProcessed += deleted
+                progressDone += deleted
+                reportProgress()
                 val batchElapsed = (System.currentTimeMillis() - batchStart) / 1000.0
                 log("SMS: $deletedSoFar / $totalToDelete deleted [batch: %.1fs]".format(batchElapsed))
                 delay(config.delayMs)
@@ -376,6 +406,7 @@ class MessageCleaner(
     ) {
         val uri = Telephony.Mms.CONTENT_URI
         val totalToDelete = ids.size
+        progressTotal += totalToDelete
         log("=== Deleting $label messages ===")
         log("$label: $totalToDelete messages across ${conversations.size} threads")
 
@@ -407,6 +438,8 @@ class MessageCleaner(
                     val deleted = contentResolver.delete(uri, "thread_id = ?", arrayOf(threadId))
                     deletedSoFar += deleted
                     totalProcessed += deleted
+                    progressDone += deleted
+                    reportProgress()
                     debugLog("$label thread $threadId: deleted $deleted in ${System.currentTimeMillis() - threadStart}ms")
                 } catch (e: Exception) {
                     debugLog("$label thread $threadId delete failed: ${e.message}")
@@ -424,6 +457,8 @@ class MessageCleaner(
                 val deleted = deleteWithProgress(label, uri, batch, deletedSoFar)
                 deletedSoFar += deleted
                 totalProcessed += deleted
+                progressDone += deleted
+                reportProgress()
                 val batchElapsed = (System.currentTimeMillis() - batchStart) / 1000.0
                 log("$label: $deletedSoFar / $totalToDelete deleted [batch: %.1fs]".format(batchElapsed))
                 delay(config.delayMs)
@@ -575,10 +610,14 @@ class MessageCleaner(
         alreadyDeletedBefore: Int
     ): Int {
         val authority = uri.authority ?: return 0
-        val chunks = ids.chunked(config.deleteChunkSize)
         var totalDeleted = 0
-        for ((index, chunk) in chunks.withIndex()) {
+        var offset = 0
+        var chunkIndex = 0
+        val totalChunks = (ids.size + currentChunkSize - 1) / currentChunkSize // estimate for log
+        while (offset < ids.size) {
             coroutineContext.ensureActive()
+            val chunkEnd = (offset + currentChunkSize).coerceAtMost(ids.size)
+            val chunk = ids.subList(offset, chunkEnd)
             val chunkStart = System.currentTimeMillis()
             val ops = ArrayList<ContentProviderOperation>(chunk.size)
             for (id in chunk) {
@@ -600,11 +639,14 @@ class MessageCleaner(
             }
             val chunkElapsed = System.currentTimeMillis() - chunkStart
             val running = alreadyDeletedBefore + totalDeleted
+            chunkIndex++
             if (config.debugLogging) {
-                debugLog("$label chunk ${index + 1}/${chunks.size}: ${chunk.size} in ${chunkElapsed}ms [running: $running]")
+                debugLog("$label chunk $chunkIndex/~$totalChunks: ${chunk.size} in ${chunkElapsed}ms [running: $running]")
             } else {
                 log("  $label: $running deleted so far")
             }
+            offset = chunkEnd
+            adjustChunkSize(chunkElapsed, chunk.size)
         }
         return totalDeleted
     }
@@ -699,5 +741,7 @@ class MessageCleaner(
 
     companion object {
         private const val ROW_OVERHEAD = 200L
+        private const val AUTO_TUNE_MIN = 10
+        private const val AUTO_TUNE_MAX = 500
     }
 }
