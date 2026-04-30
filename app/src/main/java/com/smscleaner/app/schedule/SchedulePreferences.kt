@@ -25,6 +25,7 @@ class SchedulePreferences(context: Context) {
             .putInt("batch_size_mms_group", config.batchSizeMmsGroup)
             .putInt("delete_chunk_size", config.deleteChunkSize)
             .putLong("delay_ms", config.delayMs)
+            .putBoolean("requires_charging", config.requiresCharging)
             .putLong("last_run_ms", prefs.getLong("last_run_ms", 0))
             .apply()
     }
@@ -48,7 +49,8 @@ class SchedulePreferences(context: Context) {
             batchSizeMmsMedia = prefs.getInt("batch_size_mms_media", 100),
             batchSizeMmsGroup = prefs.getInt("batch_size_mms_group", 500),
             deleteChunkSize = prefs.getInt("delete_chunk_size", 50),
-            delayMs = prefs.getLong("delay_ms", 100)
+            delayMs = prefs.getLong("delay_ms", 100),
+            requiresCharging = prefs.getBoolean("requires_charging", true)
         )
     }
 

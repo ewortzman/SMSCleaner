@@ -57,6 +57,7 @@ class ScheduledCleanFragment : Fragment(R.layout.fragment_scheduled_clean) {
         val etBatchSizeMmsGroup = view.findViewById<TextInputEditText>(R.id.etSchedBatchSizeMmsGroup)
         val etChunkSize = view.findViewById<TextInputEditText>(R.id.etSchedChunkSize)
         val etDelay = view.findViewById<TextInputEditText>(R.id.etSchedDelay)
+        val cbRequiresCharging = view.findViewById<MaterialCheckBox>(R.id.cbRequiresCharging)
         val btnSave = view.findViewById<MaterialButton>(R.id.btnSaveSchedule)
 
         // Setup dropdowns
@@ -127,6 +128,7 @@ class ScheduledCleanFragment : Fragment(R.layout.fragment_scheduled_clean) {
         etBatchSizeMmsGroup.setText(config.batchSizeMmsGroup.toString())
         etChunkSize.setText(config.deleteChunkSize.toString())
         etDelay.setText(config.delayMs.toString())
+        cbRequiresCharging.isChecked = config.requiresCharging
 
         updateStatus(tvStatus)
 
@@ -159,7 +161,8 @@ class ScheduledCleanFragment : Fragment(R.layout.fragment_scheduled_clean) {
                 batchSizeMmsMedia = etBatchSizeMmsMedia.text.toString().toIntOrNull() ?: 100,
                 batchSizeMmsGroup = etBatchSizeMmsGroup.text.toString().toIntOrNull() ?: 500,
                 deleteChunkSize = etChunkSize.text.toString().toIntOrNull() ?: 50,
-                delayMs = etDelay.text.toString().toLongOrNull() ?: 100
+                delayMs = etDelay.text.toString().toLongOrNull() ?: 100,
+                requiresCharging = cbRequiresCharging.isChecked
             )
 
             if (newConfig.enabled) {

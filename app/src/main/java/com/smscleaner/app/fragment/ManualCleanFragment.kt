@@ -7,6 +7,7 @@ import android.widget.CompoundButton
 import android.widget.ScrollView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.viewModels
 import com.google.android.material.button.MaterialButton
@@ -175,7 +176,18 @@ class ManualCleanFragment : Fragment(R.layout.fragment_manual_clean) {
         }
 
         btnDryRun.setOnClickListener { buildConfig()?.let { viewModel.startDryRun(it) } }
-        btnRun.setOnClickListener { buildConfig()?.let { viewModel.startClean(it) } }
+        btnRun.setOnClickListener {
+            val config = buildConfig() ?: return@setOnClickListener
+            val count = viewModel.lastDryRunCount.value ?: 0
+            AlertDialog.Builder(requireContext())
+                .setTitle(R.string.confirm_delete_title)
+                .setMessage(getString(R.string.confirm_delete_message, count))
+                .setPositiveButton(R.string.confirm_delete_positive) { _, _ ->
+                    viewModel.startClean(config)
+                }
+                .setNegativeButton(R.string.confirm_delete_negative, null)
+                .show()
+        }
         btnStop.setOnClickListener { viewModel.stop() }
 
         // Observe ViewModel

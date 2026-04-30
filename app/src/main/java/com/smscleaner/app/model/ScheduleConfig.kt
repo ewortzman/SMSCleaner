@@ -18,5 +18,6 @@ data class ScheduleConfig(
     val batchSizeMmsMedia: Int = 100,
     val batchSizeMmsGroup: Int = 500,
     val deleteChunkSize: Int = 50,
-    val delayMs: Long = 100
+    val delayMs: Long = 100,
+    val requiresCharging: Boolean = true
 )

@@ -1,6 +1,7 @@
 package com.smscleaner.app.schedule
 
 import android.content.Context
+import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
@@ -39,8 +40,13 @@ class ScheduleManager(private val context: Context) {
     private fun scheduleWork(config: ScheduleConfig) {
         val initialDelay = computeInitialDelay(config)
 
+        val constraints = Constraints.Builder()
+            .setRequiresCharging(config.requiresCharging)
+            .build()
+
         val request = PeriodicWorkRequestBuilder<ScheduledCleanWorker>(24, TimeUnit.HOURS)
             .setInitialDelay(initialDelay, TimeUnit.MILLISECONDS)
+            .setConstraints(constraints)
             .build()
 
         WorkManager.getInstance(context).enqueueUniquePeriodicWork(

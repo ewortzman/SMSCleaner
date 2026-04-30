@@ -63,4 +63,9 @@
     <string name="schedule_threshold">Delete Threshold</string>
     <string name="schedule_delete_older_than">Delete messages older than</string>
     <string name="schedule_save">Save Schedule</string>
+    <string name="schedule_requires_charging">Only run when plugged in</string>
+    <string name="confirm_delete_title">Confirm Deletion</string>
+    <string name="confirm_delete_message">Delete %1$d messages? This cannot be undone.</string>
+    <string name="confirm_delete_positive">Delete</string>
+    <string name="confirm_delete_negative">Cancel</string>
 </resources>

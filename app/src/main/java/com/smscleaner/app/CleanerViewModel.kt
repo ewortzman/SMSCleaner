@@ -24,6 +24,9 @@ class CleanerViewModel(application: Application) : AndroidViewModel(application)
     private val _isRunButtonEnabled = MutableLiveData(false)
     val isRunButtonEnabled: LiveData<Boolean> = _isRunButtonEnabled
 
+    private val _lastDryRunCount = MutableLiveData(0)
+    val lastDryRunCount: LiveData<Int> = _lastDryRunCount
+
     private var currentJob: Job? = null
     private val logBuilder = StringBuilder()
     private var cachedScanResults: ScanResults? = null
@@ -59,6 +62,7 @@ class CleanerViewModel(application: Application) : AndroidViewModel(application)
                     _isDryRunComplete.value = true
                     _isRunButtonEnabled.value = true
                     _isRunning.value = false
+                    _lastDryRunCount.value = count
                 }
             } catch (_: kotlinx.coroutines.CancellationException) {
                 _isRunning.postValue(false)
