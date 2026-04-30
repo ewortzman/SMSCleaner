@@ -70,10 +70,10 @@ class ScheduledCleanWorker(
                 parseProgress(line)
                 updateNotification("$lastStage\n$deletedCount messages deleted")
             },
-            onProgress = { done, total ->
-                if (total > 0) {
-                    val pct = (done * 100) / total.coerceAtLeast(1)
-                    updateProgressNotification(done, total, pct)
+            onProgress = { p ->
+                if (p.overallTotal > 0) {
+                    val pct = (p.overallDone * 100) / p.overallTotal.coerceAtLeast(1)
+                    updateProgressNotification(p.overallDone, p.overallTotal, pct)
                 }
             }
         )

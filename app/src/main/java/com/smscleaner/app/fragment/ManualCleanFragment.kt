@@ -101,6 +101,10 @@ class ManualCleanFragment : Fragment(R.layout.fragment_manual_clean) {
         val btnStop = view.findViewById<MaterialButton>(R.id.btnStop)
         val progressBar = view.findViewById<LinearProgressIndicator>(R.id.progressBar)
         val tvProgressLabel = view.findViewById<MaterialTextView>(R.id.tvProgressLabel)
+        val tvStageLabel = view.findViewById<MaterialTextView>(R.id.tvStageLabel)
+        val progressOverall = view.findViewById<LinearProgressIndicator>(R.id.progressOverall)
+        val tvOverallLabel = view.findViewById<MaterialTextView>(R.id.tvOverallLabel)
+        val tvEtaLabel = view.findViewById<MaterialTextView>(R.id.tvEtaLabel)
         val tvLog = view.findViewById<MaterialTextView>(R.id.tvLog)
         val scrollLog = view.findViewById<ScrollView>(R.id.scrollLog)
         val tvStorageStatus = view.findViewById<MaterialTextView>(R.id.tvStorageStatus)
@@ -252,12 +256,14 @@ class ManualCleanFragment : Fragment(R.layout.fragment_manual_clean) {
                 rm.isRoleHeld(RoleManager.ROLE_SMS)
             }
             btnStop.isEnabled = running
-            progressBar.visibility = if (running) View.VISIBLE else View.GONE
-            tvProgressLabel.visibility = if (running) View.VISIBLE else View.GONE
+            val vis = if (running) View.VISIBLE else View.GONE
+            progressBar.visibility = vis
+            tvStageLabel.visibility = vis
+            progressOverall.visibility = vis
+            tvOverallLabel.visibility = vis
+            tvEtaLabel.visibility = vis
             btnRun.isEnabled = !running && viewModel.isDryRunComplete.value == true
-            if (!running) {
-                refreshStorageStatus(tvStorageStatus)
-            }
+            if (!running) refreshStorageStatus(tvStorageStatus)
         }
 
         viewModel.isRunButtonEnabled.observe(viewLifecycleOwner) { enabled ->
@@ -265,16 +271,30 @@ class ManualCleanFragment : Fragment(R.layout.fragment_manual_clean) {
         }
 
         viewModel.progress.observe(viewLifecycleOwner) { p ->
-            if (p.total > 0) {
+            // Stage bar
+            if (p.stageTotal > 0) {
                 progressBar.isIndeterminate = false
-                progressBar.max = p.total
-                progressBar.setProgress(p.done, true)
-                val pct = (p.done * 100) / p.total.coerceAtLeast(1)
-                tvProgressLabel.text = "${p.done} / ${p.total} ($pct%)"
+                progressBar.max = p.stageTotal
+                progressBar.setProgress(p.stageDone, true)
+                val pct = (p.stageDone * 100) / p.stageTotal.coerceAtLeast(1)
+                tvStageLabel.text = "${p.stageName}: ${p.stageDone} / ${p.stageTotal} ($pct%)"
             } else {
                 progressBar.isIndeterminate = true
-                tvProgressLabel.text = "Scanning…"
+                tvStageLabel.text = "Scanning…"
             }
+            // Overall bar
+            if (p.overallTotal > 0) {
+                progressOverall.isIndeterminate = false
+                progressOverall.max = p.overallTotal
+                progressOverall.setProgress(p.overallDone, true)
+                val pct = (p.overallDone * 100) / p.overallTotal.coerceAtLeast(1)
+                tvOverallLabel.text = "Total: ${p.overallDone} / ${p.overallTotal} ($pct%)"
+            } else {
+                progressOverall.isIndeterminate = true
+                tvOverallLabel.text = "Total: —"
+            }
+            // ETA
+            tvEtaLabel.text = if (p.etaSeconds > 0) "ETA: ${formatEta(p.etaSeconds)}" else "ETA: calculating…"
         }
 
         btnRefreshStorage.setOnClickListener { refreshStorageStatus(tvStorageStatus) }
@@ -287,6 +307,14 @@ class ManualCleanFragment : Fragment(R.layout.fragment_manual_clean) {
         }
 
         checkDefault()
+    }
+
+    private fun formatEta(seconds: Long): String {
+        return when {
+            seconds < 60 -> "${seconds}s"
+            seconds < 3600 -> "%dm %ds".format(seconds / 60, seconds % 60)
+            else -> "%dh %dm".format(seconds / 3600, (seconds % 3600) / 60)
+        }
     }
 
     private fun refreshStorageStatus(tv: MaterialTextView) {

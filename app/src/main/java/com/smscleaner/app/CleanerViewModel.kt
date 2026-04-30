@@ -30,9 +30,10 @@ class CleanerViewModel(application: Application) : AndroidViewModel(application)
     private val _lastContactCount = MutableLiveData(0)
     val lastContactCount: LiveData<Int> = _lastContactCount
 
-    data class Progress(val done: Int, val total: Int)
-    private val _progress = MutableLiveData(Progress(0, 0))
-    val progress: LiveData<Progress> = _progress
+    private val _progress = MutableLiveData(
+        CleanerProgress("", 0, 0, 0, 0, 0L)
+    )
+    val progress: LiveData<CleanerProgress> = _progress
 
     private var currentJob: Job? = null
     private val logBuilder = StringBuilder()
@@ -50,7 +51,7 @@ class CleanerViewModel(application: Application) : AndroidViewModel(application)
         val actualConfig = config.copy(dryRun = true)
         logBuilder.clear()
         _logText.value = ""
-        _progress.value = Progress(0, 0)
+        _progress.value = CleanerProgress("", 0, 0, 0, 0, 0L)
         appendLog("Starting dry run...")
 
         _isRunning.value = true
@@ -62,7 +63,7 @@ class CleanerViewModel(application: Application) : AndroidViewModel(application)
                 val cleaner = MessageCleaner(
                     resolver, contactResolver, actualConfig,
                     onLog = { line -> appendLogFromBackground(line) },
-                    onProgress = { done, total -> _progress.postValue(Progress(done, total)) }
+                    onProgress = { p -> _progress.postValue(p) }
                 )
                 val count = cleaner.execute()
                 cachedScanResults = cleaner.getScanResults()
@@ -94,7 +95,7 @@ class CleanerViewModel(application: Application) : AndroidViewModel(application)
         val actualConfig = config.copy(dryRun = false)
         logBuilder.clear()
         _logText.value = ""
-        _progress.value = Progress(0, 0)
+        _progress.value = CleanerProgress("", 0, 0, 0, 0, 0L)
         appendLog("Starting message deletion...")
 
         _isRunning.value = true
@@ -109,7 +110,7 @@ class CleanerViewModel(application: Application) : AndroidViewModel(application)
                 val cleaner = MessageCleaner(
                     resolver, contactResolver, actualConfig,
                     onLog = { line -> appendLogFromBackground(line) },
-                    onProgress = { done, total -> _progress.postValue(Progress(done, total)) }
+                    onProgress = { p -> _progress.postValue(p) }
                 )
                 val count = cleaner.execute(previousScan = scanToUse)
                 appendLogFromBackground("Deletion complete. $count messages deleted.")

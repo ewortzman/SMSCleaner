@@ -369,7 +369,14 @@
                 android:text="@string/btn_stop"
                 android:layout_marginBottom="@dimen/item_spacing" />
 
-            <!-- Progress -->
+            <!-- Progress: stage bar + overall bar -->
+            <com.google.android.material.textview.MaterialTextView
+                android:id="@+id/tvStageLabel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textAppearance="?attr/textAppearanceBodySmall"
+                android:visibility="gone" />
+
             <com.google.android.material.progressindicator.LinearProgressIndicator
                 android:id="@+id/progressBar"
                 android:layout_width="match_parent"
@@ -379,11 +386,33 @@
                 android:visibility="gone" />
 
             <com.google.android.material.textview.MaterialTextView
-                android:id="@+id/tvProgressLabel"
+                android:id="@+id/tvOverallLabel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textAppearance="?attr/textAppearanceBodySmall"
+                android:visibility="gone" />
+
+            <com.google.android.material.progressindicator.LinearProgressIndicator
+                android:id="@+id/progressOverall"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="4dp"
+                android:indeterminate="false"
+                android:visibility="gone" />
+
+            <com.google.android.material.textview.MaterialTextView
+                android:id="@+id/tvEtaLabel"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:textAppearance="?attr/textAppearanceBodySmall"
                 android:layout_marginBottom="@dimen/item_spacing"
+                android:visibility="gone" />
+
+            <!-- Back-compat placeholder (unused, kept for fragment code reference) -->
+            <com.google.android.material.textview.MaterialTextView
+                android:id="@+id/tvProgressLabel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
                 android:visibility="gone" />
 
             <!-- Log Output Section -->

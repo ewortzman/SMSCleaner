@@ -33,6 +33,15 @@ data class CleanerConfig(
     val excludedNumbers: Set<String> = emptySet()
 )
 
+data class CleanerProgress(
+    val stageName: String,
+    val stageDone: Int,
+    val stageTotal: Int,
+    val overallDone: Int,
+    val overallTotal: Int,
+    val etaSeconds: Long
+)
+
 data class ScanResults(
     val smsThreadMap: Map<String, List<Long>>,
     val smsAddressMap: Map<String, String>,
@@ -48,14 +57,18 @@ class MessageCleaner(
     private val contactResolver: ContactResolver,
     private val config: CleanerConfig,
     private val onLog: (String) -> Unit,
-    private val onProgress: ((done: Int, total: Int) -> Unit)? = null
+    private val onProgress: ((CleanerProgress) -> Unit)? = null
 ) {
 
     private var totalProcessed = 0
     private var totalSizeBytes = 0L
-    private var progressDone = 0
-    private var progressTotal = 0
+    private var overallDone = 0
+    private var overallTotal = 0
+    private var stageName = ""
+    private var stageDone = 0
+    private var stageTotal = 0
     private var currentChunkSize = config.deleteChunkSize
+    private var deleteStartMs = 0L
 
     private val excludedNormalized: Set<String> = config.excludedNumbers
         .map { it.filter { c -> c.isDigit() || c == '+' } }
@@ -72,7 +85,28 @@ class MessageCleaner(
     }
 
     private fun reportProgress() {
-        onProgress?.invoke(progressDone, progressTotal)
+        val eta = if (deleteStartMs > 0 && overallDone > 0 && overallTotal > overallDone) {
+            val elapsed = System.currentTimeMillis() - deleteStartMs
+            val ratePerMs = overallDone.toDouble() / elapsed.coerceAtLeast(1).toDouble()
+            val remaining = overallTotal - overallDone
+            ((remaining / ratePerMs.coerceAtLeast(0.0001)) / 1000L).toLong()
+        } else 0L
+        onProgress?.invoke(CleanerProgress(stageName, stageDone, stageTotal, overallDone, overallTotal, eta))
+    }
+
+    private fun startStage(name: String, total: Int) {
+        stageName = name
+        stageDone = 0
+        stageTotal = total
+        overallTotal += total
+        if (deleteStartMs == 0L) deleteStartMs = System.currentTimeMillis()
+        reportProgress()
+    }
+
+    private fun advanceStage(delta: Int) {
+        stageDone += delta
+        overallDone += delta
+        reportProgress()
     }
 
     private fun adjustChunkSize(chunkElapsedMs: Long, chunkItems: Int) {
@@ -110,8 +144,12 @@ class MessageCleaner(
     suspend fun execute(previousScan: ScanResults? = null): Int {
         totalProcessed = 0
         totalSizeBytes = 0L
-        progressDone = 0
-        progressTotal = 0
+        overallDone = 0
+        overallTotal = 0
+        stageName = ""
+        stageDone = 0
+        stageTotal = 0
+        deleteStartMs = 0L
 
         logDatabaseTotals()
 
@@ -242,7 +280,7 @@ class MessageCleaner(
     private suspend fun deleteSmsFromScan(scan: ScanResults) {
         val uri = Telephony.Sms.CONTENT_URI
         val totalToDelete = scan.smsThreadMap.values.sumOf { it.size }
-        progressTotal += totalToDelete
+        startStage("SMS", totalToDelete)
         log("=== Deleting SMS messages ===")
         log("SMS: $totalToDelete messages across ${scan.smsThreadMap.size} threads")
 
@@ -277,8 +315,7 @@ class MessageCleaner(
                     )
                     deletedSoFar += deleted
                     totalProcessed += deleted
-                    progressDone += deleted
-                    reportProgress()
+                    advanceStage(deleted)
                     debugLog("Thread $threadId: deleted $deleted in ${System.currentTimeMillis() - threadStart}ms")
                 } catch (e: Exception) {
                     debugLog("Thread $threadId delete failed: ${e.message}")
@@ -297,8 +334,7 @@ class MessageCleaner(
                 val deleted = deleteWithProgress("SMS", uri, batch, deletedSoFar)
                 deletedSoFar += deleted
                 totalProcessed += deleted
-                progressDone += deleted
-                reportProgress()
+                advanceStage(deleted)
                 val batchElapsed = (System.currentTimeMillis() - batchStart) / 1000.0
                 log("SMS: $deletedSoFar / $totalToDelete deleted [batch: %.1fs]".format(batchElapsed))
                 delay(config.delayMs)
@@ -424,7 +460,7 @@ class MessageCleaner(
     ) {
         val uri = Telephony.Mms.CONTENT_URI
         val totalToDelete = ids.size
-        progressTotal += totalToDelete
+        startStage(label, totalToDelete)
         log("=== Deleting $label messages ===")
         log("$label: $totalToDelete messages across ${conversations.size} threads")
 
@@ -456,8 +492,7 @@ class MessageCleaner(
                     val deleted = contentResolver.delete(uri, "thread_id = ?", arrayOf(threadId))
                     deletedSoFar += deleted
                     totalProcessed += deleted
-                    progressDone += deleted
-                    reportProgress()
+                    advanceStage(deleted)
                     debugLog("$label thread $threadId: deleted $deleted in ${System.currentTimeMillis() - threadStart}ms")
                 } catch (e: Exception) {
                     debugLog("$label thread $threadId delete failed: ${e.message}")
@@ -475,8 +510,7 @@ class MessageCleaner(
                 val deleted = deleteWithProgress(label, uri, batch, deletedSoFar)
                 deletedSoFar += deleted
                 totalProcessed += deleted
-                progressDone += deleted
-                reportProgress()
+                advanceStage(deleted)
                 val batchElapsed = (System.currentTimeMillis() - batchStart) / 1000.0
                 log("$label: $deletedSoFar / $totalToDelete deleted [batch: %.1fs]".format(batchElapsed))
                 delay(config.delayMs)
