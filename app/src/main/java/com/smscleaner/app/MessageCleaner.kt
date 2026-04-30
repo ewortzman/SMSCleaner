@@ -29,7 +29,8 @@ data class CleanerConfig(
     val dryRun: Boolean,
     val deleteOrder: DeleteOrder = DeleteOrder.OLDEST_FIRST,
     val debugLogging: Boolean = false,
-    val autoTune: Boolean = false
+    val autoTune: Boolean = false,
+    val excludedNumbers: Set<String> = emptySet()
 )
 
 data class ScanResults(
@@ -55,6 +56,20 @@ class MessageCleaner(
     private var progressDone = 0
     private var progressTotal = 0
     private var currentChunkSize = config.deleteChunkSize
+
+    private val excludedNormalized: Set<String> = config.excludedNumbers
+        .map { it.filter { c -> c.isDigit() || c == '+' } }
+        .filter { it.isNotEmpty() }
+        .toSet()
+
+    private fun isExcluded(address: String): Boolean {
+        if (excludedNormalized.isEmpty()) return false
+        val normalized = address.filter { c -> c.isDigit() || c == '+' }
+        if (normalized in excludedNormalized) return true
+        // Compare last 10 digits to handle +1 prefix mismatches
+        val tail10 = normalized.takeLast(10)
+        return excludedNormalized.any { it.takeLast(10) == tail10 && tail10.isNotEmpty() }
+    }
 
     private fun reportProgress() {
         onProgress?.invoke(progressDone, progressTotal)
@@ -202,6 +217,7 @@ class MessageCleaner(
                     val threadId = cursor.getString(1) ?: "unknown"
                     val address = cursor.getString(2) ?: "unknown"
                     val body = cursor.getString(3)
+                    if (isExcluded(address)) continue
                     smsBytes += ROW_OVERHEAD + (body?.toByteArray()?.size ?: 0)
                     result.threadMap.getOrPut(threadId) { mutableListOf() }.add(id)
                     result.addressMap[threadId] = address
@@ -352,10 +368,12 @@ class MessageCleaner(
                 val isGroupMatch = isGroup && !hasMedia && config.includeMmsGroup
 
                 if (isMediaMatch || isGroupMatch) {
+                    // Address lookup needed for dry run display or exclusion filtering
+                    val needAddress = config.dryRun || excludedNormalized.isNotEmpty()
+                    val address = if (needAddress) getMmsAddress(row.id) else null
+                    if (address != null && isExcluded(address)) continue
                     matchCount++
-                    // Only look up address/size during dry run — not needed for delete
-                    if (config.dryRun) {
-                        val address = getMmsAddress(row.id)
+                    if (address != null) {
                         result.addressMap[row.threadId.toString()] = address
                     }
 

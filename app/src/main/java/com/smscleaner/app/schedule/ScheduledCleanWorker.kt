@@ -42,6 +42,7 @@ class ScheduledCleanWorker(
         setForeground(createForegroundInfo("Starting scheduled cleanup..."))
 
         val cutoffDate = computeCutoffDate(config.deleteOlderThanMonths)
+        val exclusions = ExclusionPreferences(applicationContext).load()
 
         val cleanerConfig = CleanerConfig(
             startDateMs = null,
@@ -56,7 +57,8 @@ class ScheduledCleanWorker(
             deleteChunkSize = config.deleteChunkSize,
             delayMs = config.delayMs,
             dryRun = false,
-            deleteOrder = DeleteOrder.OLDEST_FIRST
+            deleteOrder = DeleteOrder.OLDEST_FIRST,
+            excludedNumbers = exclusions
         )
 
         val resolver = applicationContext.contentResolver

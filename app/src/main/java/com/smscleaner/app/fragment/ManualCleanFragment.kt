@@ -39,6 +39,30 @@ class ManualCleanFragment : Fragment(R.layout.fragment_manual_clean) {
         timeZone = TimeZone.getTimeZone("UTC")
     }
 
+    private var currentExclusionsDialog: ExclusionsDialog? = null
+
+    private val contactPickerLauncher = registerForActivityResult(
+        ActivityResultContracts.PickContact()
+    ) { uri ->
+        if (uri == null) return@registerForActivityResult
+        val number = resolveContactPhone(uri)
+        if (number != null) {
+            currentExclusionsDialog?.addNumber(number)
+        }
+    }
+
+    private fun resolveContactPhone(uri: android.net.Uri): String? {
+        return try {
+            requireContext().contentResolver.query(
+                uri,
+                arrayOf(android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER),
+                null, null, null
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) cursor.getString(0) else null
+            }
+        } catch (_: Exception) { null }
+    }
+
     private val defaultSmsLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) {
@@ -81,6 +105,16 @@ class ManualCleanFragment : Fragment(R.layout.fragment_manual_clean) {
         val scrollLog = view.findViewById<ScrollView>(R.id.scrollLog)
         val tvStorageStatus = view.findViewById<MaterialTextView>(R.id.tvStorageStatus)
         val btnRefreshStorage = view.findViewById<MaterialButton>(R.id.btnRefreshStorage)
+        val btnManageExclusions = view.findViewById<MaterialButton>(R.id.btnManageExclusions)
+
+        val exclusionPrefs = com.smscleaner.app.schedule.ExclusionPreferences(requireContext())
+        btnManageExclusions.setOnClickListener {
+            val dialog = ExclusionsDialog(requireContext(), exclusionPrefs) {
+                contactPickerLauncher.launch(null)
+            }
+            currentExclusionsDialog = dialog
+            dialog.show()
+        }
 
         // Default SMS check
         fun checkDefault() {
@@ -178,7 +212,8 @@ class ManualCleanFragment : Fragment(R.layout.fragment_manual_clean) {
                 delayMs = delayMs.coerceAtLeast(0),
                 dryRun = true, deleteOrder = deleteOrder,
                 debugLogging = cbDebugLogging.isChecked,
-                autoTune = cbAutoTune.isChecked
+                autoTune = cbAutoTune.isChecked,
+                excludedNumbers = exclusionPrefs.load()
             )
         }
 

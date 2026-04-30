@@ -17,6 +17,16 @@
             android:orientation="vertical"
             android:padding="@dimen/activity_horizontal_margin">
 
+            <!-- Exclusions Button -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnManageExclusions"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="@dimen/min_touch_target"
+                android:layout_marginBottom="@dimen/item_spacing"
+                android:text="@string/manage_exclusions" />
+
             <!-- Storage Status Card -->
             <com.google.android.material.card.MaterialCardView
                 android:id="@+id/cardStorage"

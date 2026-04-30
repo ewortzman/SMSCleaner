@@ -74,4 +74,12 @@
     <string name="auto_tune">Auto-tune chunk size</string>
     <string name="contact_warning_title">Contacts involved</string>
     <string name="contact_warning_message">%1$d messages involve saved contacts. Review the log before proceeding.</string>
+    <string name="manage_exclusions">Manage Exclusions</string>
+    <string name="exclusions_title">Excluded Numbers</string>
+    <string name="exclusions_hint">Add number (e.g. +15551234567)</string>
+    <string name="add">Add</string>
+    <string name="remove">Remove</string>
+    <string name="close">Close</string>
+    <string name="no_exclusions">No numbers excluded.</string>
+    <string name="pick_contact">Pick Contact</string>
 </resources>
