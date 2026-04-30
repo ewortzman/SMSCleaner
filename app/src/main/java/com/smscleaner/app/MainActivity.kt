@@ -12,7 +12,7 @@ import androidx.fragment.app.Fragment
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.navigation.NavigationView
 import com.smscleaner.app.fragment.ManualCleanFragment
-import com.smscleaner.app.fragment.ScheduledCleanFragment
+import com.smscleaner.app.fragment.ScheduleListFragment
 import com.smscleaner.app.fragment.TestMessagesFragment
 
 class MainActivity : AppCompatActivity() {
@@ -53,7 +53,7 @@ class MainActivity : AppCompatActivity() {
         navigationView.setNavigationItemSelectedListener { item ->
             when (item.itemId) {
                 R.id.nav_manual_clean -> showFragment(ManualCleanFragment(), "Manual Clean")
-                R.id.nav_scheduled_clean -> showFragment(ScheduledCleanFragment(), "Scheduled Clean")
+                R.id.nav_scheduled_clean -> showFragment(ScheduleListFragment(), "Scheduled Clean")
                 R.id.nav_test_messages -> showFragment(TestMessagesFragment(), "Test Messages")
             }
             drawerLayout.closeDrawers()

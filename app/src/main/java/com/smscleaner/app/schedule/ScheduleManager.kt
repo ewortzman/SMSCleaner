@@ -2,9 +2,11 @@ package com.smscleaner.app.schedule
 
 import android.content.Context
 import androidx.work.Constraints
+import androidx.work.Data
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import com.smscleaner.app.model.RecurrenceType
 import com.smscleaner.app.model.ScheduleConfig
 import java.util.Calendar
 import java.util.concurrent.TimeUnit
@@ -13,26 +15,23 @@ class ScheduleManager(private val context: Context) {
 
     private val prefs = SchedulePreferences(context)
 
-    fun enableSchedule(config: ScheduleConfig) {
-        prefs.save(config.copy(enabled = true))
-        scheduleWork(config)
+    fun getAll(): List<ScheduleConfig> = prefs.loadAll()
+
+    fun getById(id: String): ScheduleConfig? = prefs.loadById(id)
+
+    fun upsert(config: ScheduleConfig) {
+        prefs.upsert(config)
+        if (config.enabled) scheduleWork(config) else cancelWork(config.id)
     }
 
-    fun disableSchedule() {
-        val config = prefs.load()
-        prefs.save(config.copy(enabled = false))
-        WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME)
+    fun delete(id: String) {
+        cancelWork(id)
+        prefs.remove(id)
     }
 
-    fun isEnabled(): Boolean = prefs.load().enabled
-
-    fun getConfig(): ScheduleConfig = prefs.load()
-
-    fun getNextRunDescription(): String? {
-        val config = prefs.load()
+    fun getNextRunDescription(config: ScheduleConfig): String? {
         if (!config.enabled) return null
-
-        val next = computeNextRun(config) ?: return null
+        val next = computeNextRun(config)
         val fmt = java.text.SimpleDateFormat("EEE, MMM dd 'at' h:mm a", java.util.Locale.US)
         return fmt.format(java.util.Date(next))
     }
@@ -44,16 +43,25 @@ class ScheduleManager(private val context: Context) {
             .setRequiresCharging(config.requiresCharging)
             .build()
 
+        val inputData = Data.Builder()
+            .putString(KEY_SCHEDULE_ID, config.id)
+            .build()
+
         val request = PeriodicWorkRequestBuilder<ScheduledCleanWorker>(24, TimeUnit.HOURS)
             .setInitialDelay(initialDelay, TimeUnit.MILLISECONDS)
             .setConstraints(constraints)
+            .setInputData(inputData)
             .build()
 
         WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-            WORK_NAME,
+            workNameFor(config.id),
             ExistingPeriodicWorkPolicy.UPDATE,
             request
         )
+    }
+
+    private fun cancelWork(id: String) {
+        WorkManager.getInstance(context).cancelUniqueWork(workNameFor(id))
     }
 
     private fun computeInitialDelay(config: ScheduleConfig): Long {
@@ -70,7 +78,7 @@ class ScheduleManager(private val context: Context) {
         return target.timeInMillis - now
     }
 
-    private fun computeNextRun(config: ScheduleConfig): Long? {
+    private fun computeNextRun(config: ScheduleConfig): Long {
         val cal = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, config.hour)
             set(Calendar.MINUTE, config.minute)
@@ -79,21 +87,20 @@ class ScheduleManager(private val context: Context) {
         }
 
         when (config.recurrenceType) {
-            com.smscleaner.app.model.RecurrenceType.WEEKLY -> {
+            RecurrenceType.WEEKLY -> {
                 while (cal.get(Calendar.DAY_OF_WEEK) != config.dayOfWeek || cal.timeInMillis <= System.currentTimeMillis()) {
                     cal.add(Calendar.DAY_OF_YEAR, 1)
                 }
             }
-            com.smscleaner.app.model.RecurrenceType.BIWEEKLY -> {
-                val lastRun = prefs.getLastRunMs()
+            RecurrenceType.BIWEEKLY -> {
                 while (cal.get(Calendar.DAY_OF_WEEK) != config.dayOfWeek || cal.timeInMillis <= System.currentTimeMillis()) {
                     cal.add(Calendar.DAY_OF_YEAR, 1)
                 }
-                if (lastRun > 0 && cal.timeInMillis - lastRun < 13 * 24 * 60 * 60 * 1000L) {
+                if (config.lastRunMs > 0 && cal.timeInMillis - config.lastRunMs < 13 * 24 * 60 * 60 * 1000L) {
                     cal.add(Calendar.DAY_OF_YEAR, 7)
                 }
             }
-            com.smscleaner.app.model.RecurrenceType.MONTHLY -> {
+            RecurrenceType.MONTHLY -> {
                 cal.set(Calendar.DAY_OF_MONTH, config.dayOfMonth.coerceAtMost(cal.getActualMaximum(Calendar.DAY_OF_MONTH)))
                 if (cal.timeInMillis <= System.currentTimeMillis()) {
                     cal.add(Calendar.MONTH, 1)
@@ -105,6 +112,7 @@ class ScheduleManager(private val context: Context) {
     }
 
     companion object {
-        const val WORK_NAME = "scheduled_clean"
+        const val KEY_SCHEDULE_ID = "schedule_id"
+        fun workNameFor(id: String): String = "scheduled_clean_$id"
     }
 }

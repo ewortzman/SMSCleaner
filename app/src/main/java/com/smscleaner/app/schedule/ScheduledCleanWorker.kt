@@ -27,10 +27,11 @@ class ScheduledCleanWorker(
 
     override suspend fun doWork(): Result {
         val prefs = SchedulePreferences(applicationContext)
-        val config = prefs.load()
+        val scheduleId = inputData.getString(ScheduleManager.KEY_SCHEDULE_ID) ?: return Result.success()
+        val config = prefs.loadById(scheduleId) ?: return Result.success()
 
         if (!config.enabled) return Result.success()
-        if (!shouldRunToday(config, prefs)) return Result.success()
+        if (!shouldRunToday(config)) return Result.success()
 
         // Check if app is default SMS
         val roleManager = applicationContext.getSystemService(android.app.role.RoleManager::class.java)
@@ -79,7 +80,7 @@ class ScheduledCleanWorker(
 
         return try {
             val count = cleaner.execute()
-            prefs.setLastRunMs(System.currentTimeMillis())
+            prefs.updateLastRun(scheduleId, System.currentTimeMillis())
             showCompletionNotification(count)
             Result.success()
         } catch (_: kotlinx.coroutines.CancellationException) {
@@ -91,15 +92,14 @@ class ScheduledCleanWorker(
         }
     }
 
-    private fun shouldRunToday(config: com.smscleaner.app.model.ScheduleConfig, prefs: SchedulePreferences): Boolean {
+    private fun shouldRunToday(config: com.smscleaner.app.model.ScheduleConfig): Boolean {
         val today = Calendar.getInstance()
         return when (config.recurrenceType) {
             RecurrenceType.WEEKLY -> today.get(Calendar.DAY_OF_WEEK) == config.dayOfWeek
             RecurrenceType.BIWEEKLY -> {
                 if (today.get(Calendar.DAY_OF_WEEK) != config.dayOfWeek) return false
-                val lastRun = prefs.getLastRunMs()
-                if (lastRun == 0L) return true
-                val daysSinceLastRun = (System.currentTimeMillis() - lastRun) / (24 * 60 * 60 * 1000)
+                if (config.lastRunMs == 0L) return true
+                val daysSinceLastRun = (System.currentTimeMillis() - config.lastRunMs) / (24 * 60 * 60 * 1000)
                 daysSinceLastRun >= 13
             }
             RecurrenceType.MONTHLY -> {

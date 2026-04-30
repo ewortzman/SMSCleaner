@@ -11,6 +11,21 @@
         android:orientation="vertical"
         android:padding="@dimen/activity_horizontal_margin">
 
+        <!-- Name -->
+        <com.google.android.material.textfield.TextInputLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="@dimen/item_spacing"
+            android:hint="@string/schedule_name"
+            style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/etScheduleName"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="@dimen/min_touch_target" />
+        </com.google.android.material.textfield.TextInputLayout>
+
         <!-- Enable Switch -->
         <com.google.android.material.materialswitch.MaterialSwitch
             android:id="@+id/switchEnabled"
@@ -256,14 +271,39 @@
             android:checked="true"
             android:text="@string/schedule_requires_charging" />
 
-        <!-- Save Button -->
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnSaveSchedule"
+        <!-- Save / Delete / Cancel Buttons -->
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:minHeight="@dimen/min_touch_target"
-            android:text="@string/schedule_save"
-            android:layout_marginBottom="@dimen/activity_vertical_margin" />
+            android:orientation="horizontal"
+            android:layout_marginBottom="@dimen/activity_vertical_margin">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnSaveSchedule"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginEnd="4dp"
+                android:minHeight="@dimen/min_touch_target"
+                android:text="@string/schedule_save" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnDeleteSchedule"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="4dp"
+                android:minHeight="@dimen/min_touch_target"
+                android:text="@string/delete" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnCancelSchedule"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minHeight="@dimen/min_touch_target"
+                android:text="@string/confirm_delete_negative" />
+        </LinearLayout>
 
     </LinearLayout>
 </ScrollView>

@@ -4,6 +4,7 @@ import android.os.Bundle
 import android.view.View
 import android.widget.ArrayAdapter
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.fragment.app.Fragment
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.checkbox.MaterialCheckBox
@@ -23,6 +24,8 @@ import java.util.Calendar
 class ScheduledCleanFragment : Fragment(R.layout.fragment_scheduled_clean) {
 
     private lateinit var scheduleManager: ScheduleManager
+    private var editingConfig: ScheduleConfig = ScheduleConfig()
+    private var isNew: Boolean = true
     private var selectedHour = 2
     private var selectedMinute = 0
 
@@ -39,6 +42,11 @@ class ScheduledCleanFragment : Fragment(R.layout.fragment_scheduled_clean) {
         super.onViewCreated(view, savedInstanceState)
         scheduleManager = ScheduleManager(requireContext())
 
+        val scheduleId = arguments?.getString(ARG_SCHEDULE_ID)
+        editingConfig = scheduleId?.let { scheduleManager.getById(it) } ?: ScheduleConfig()
+        isNew = scheduleId == null || scheduleManager.getById(scheduleId) == null
+
+        val etScheduleName = view.findViewById<TextInputEditText>(R.id.etScheduleName)
         val switchEnabled = view.findViewById<MaterialSwitch>(R.id.switchEnabled)
         val tvStatus = view.findViewById<MaterialTextView>(R.id.tvScheduleStatus)
         val spinnerFrequency = view.findViewById<MaterialAutoCompleteTextView>(R.id.spinnerFrequency)
@@ -59,14 +67,14 @@ class ScheduledCleanFragment : Fragment(R.layout.fragment_scheduled_clean) {
         val etDelay = view.findViewById<TextInputEditText>(R.id.etSchedDelay)
         val cbRequiresCharging = view.findViewById<MaterialCheckBox>(R.id.cbRequiresCharging)
         val btnSave = view.findViewById<MaterialButton>(R.id.btnSaveSchedule)
+        val btnDelete = view.findViewById<MaterialButton>(R.id.btnDeleteSchedule)
+        val btnCancel = view.findViewById<MaterialButton>(R.id.btnCancelSchedule)
 
-        // Setup dropdowns
         spinnerFrequency.setAdapter(ArrayAdapter(requireContext(), android.R.layout.simple_dropdown_item_1line, frequencies))
         spinnerDayOfWeek.setAdapter(ArrayAdapter(requireContext(), android.R.layout.simple_dropdown_item_1line, daysOfWeek))
         spinnerDayOfMonth.setAdapter(ArrayAdapter(requireContext(), android.R.layout.simple_dropdown_item_1line, (1..28).map { it.toString() }.toTypedArray()))
         spinnerThreshold.setAdapter(ArrayAdapter(requireContext(), android.R.layout.simple_dropdown_item_1line, thresholds))
 
-        // Frequency change shows/hides day selectors
         spinnerFrequency.setOnItemClickListener { _, _, position, _ ->
             when (position) {
                 0, 1 -> { tilDayOfWeek.visibility = View.VISIBLE; tilDayOfMonth.visibility = View.GONE }
@@ -74,7 +82,6 @@ class ScheduledCleanFragment : Fragment(R.layout.fragment_scheduled_clean) {
             }
         }
 
-        // Time picker
         btnTime.setOnClickListener {
             val picker = MaterialTimePicker.Builder()
                 .setTimeFormat(TimeFormat.CLOCK_12H)
@@ -90,8 +97,9 @@ class ScheduledCleanFragment : Fragment(R.layout.fragment_scheduled_clean) {
             picker.show(childFragmentManager, "time_picker")
         }
 
-        // Load existing config
-        val config = scheduleManager.getConfig()
+        // Populate with existing config
+        val config = editingConfig
+        etScheduleName.setText(config.name)
         switchEnabled.isChecked = config.enabled
         selectedHour = config.hour
         selectedMinute = config.minute
@@ -132,7 +140,8 @@ class ScheduledCleanFragment : Fragment(R.layout.fragment_scheduled_clean) {
 
         updateStatus(tvStatus)
 
-        // Save
+        btnDelete.visibility = if (isNew) View.GONE else View.VISIBLE
+
         btnSave.setOnClickListener {
             val freqIdx = frequencies.indexOf(spinnerFrequency.text.toString()).coerceAtLeast(0)
             val recurrence = when (freqIdx) {
@@ -144,8 +153,10 @@ class ScheduledCleanFragment : Fragment(R.layout.fragment_scheduled_clean) {
             val dayOfWeekIdx = daysOfWeek.indexOf(spinnerDayOfWeek.text.toString()).coerceAtLeast(0)
             val dayOfMonth = spinnerDayOfMonth.text.toString().toIntOrNull() ?: 1
             val thresholdIdx = thresholds.indexOf(spinnerThreshold.text.toString()).let { if (it >= 0) it else 3 }
+            val name = etScheduleName.text?.toString()?.trim().takeUnless { it.isNullOrEmpty() } ?: "Cleanup"
 
-            val newConfig = ScheduleConfig(
+            val newConfig = editingConfig.copy(
+                name = name,
                 enabled = switchEnabled.isChecked,
                 recurrenceType = recurrence,
                 dayOfWeek = daysOfWeekValues[dayOfWeekIdx],
@@ -165,25 +176,40 @@ class ScheduledCleanFragment : Fragment(R.layout.fragment_scheduled_clean) {
                 requiresCharging = cbRequiresCharging.isChecked
             )
 
-            if (newConfig.enabled) {
-                scheduleManager.enableSchedule(newConfig)
-            } else {
-                scheduleManager.disableSchedule()
-            }
-
-            updateStatus(tvStatus)
+            scheduleManager.upsert(newConfig)
             Toast.makeText(requireContext(), "Schedule saved", Toast.LENGTH_SHORT).show()
+            parentFragmentManager.popBackStack()
+        }
+
+        btnDelete.setOnClickListener {
+            AlertDialog.Builder(requireContext())
+                .setTitle(R.string.delete)
+                .setMessage("Delete this schedule?")
+                .setPositiveButton(R.string.delete) { _, _ ->
+                    scheduleManager.delete(editingConfig.id)
+                    parentFragmentManager.popBackStack()
+                }
+                .setNegativeButton(R.string.confirm_delete_negative, null)
+                .show()
+        }
+
+        btnCancel.setOnClickListener {
+            parentFragmentManager.popBackStack()
         }
     }
 
     private fun updateStatus(tvStatus: MaterialTextView) {
-        val nextRun = scheduleManager.getNextRunDescription()
-        tvStatus.text = if (nextRun != null) "Next run: $nextRun" else "Schedule disabled"
+        val next = scheduleManager.getNextRunDescription(editingConfig)
+        tvStatus.text = if (next != null) "Next run: $next" else "Schedule disabled"
     }
 
     private fun formatTime(hour: Int, minute: Int): String {
         val amPm = if (hour < 12) "AM" else "PM"
         val h = if (hour == 0) 12 else if (hour > 12) hour - 12 else hour
         return "%d:%02d %s".format(h, minute, amPm)
+    }
+
+    companion object {
+        const val ARG_SCHEDULE_ID = "schedule_id"
     }
 }
